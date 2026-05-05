@@ -740,7 +740,7 @@ class WebSocketEngine:
                 "timestamp": time.time()
             })
         
-        # Track weapon equips
+        # Track senjata equips
         elif action_type == "equip":
             self._game_stats["weapon_switches"] += 1
         

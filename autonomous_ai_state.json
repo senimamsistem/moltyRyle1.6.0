@@ -1,95 +1,15 @@
 {
   "strategy_params": {
     "aggression_level": 0.8019000000000002,
-    "weak_enemy_threshold": 45,
-    "ep_conservation_threshold": 26,
+    "weak_enemy_threshold": 40,
+    "ep_conservation_threshold": 42,
     "range_combat_priority": 0.8,
     "guardian_hunting_priority": 0.6,
     "risk_tolerance": 0.5
   },
-  "optimization_cycle": 15,
-  "last_optimization_time": 1777805809.7049274,
+  "optimization_cycle": 23,
+  "last_optimization_time": 1777837008.8747504,
   "performance_history": [
-    {
-      "kills_per_game": 0,
-      "deaths_per_game": 1,
-      "kd_ratio": 0.0,
-      "survival_time": 3099,
-      "weapons_acquired": 0,
-      "guardians_killed": 0,
-      "ep_efficiency": 0.0,
-      "combat_success_rate": 0.0
-    },
-    {
-      "kills_per_game": 0,
-      "deaths_per_game": 1,
-      "kd_ratio": 0.0,
-      "survival_time": 3541,
-      "weapons_acquired": 0,
-      "guardians_killed": 0,
-      "ep_efficiency": 0.0,
-      "combat_success_rate": 0.0
-    },
-    {
-      "kills_per_game": 0,
-      "deaths_per_game": 1,
-      "kd_ratio": 0.0,
-      "survival_time": 2499,
-      "weapons_acquired": 0,
-      "guardians_killed": 0,
-      "ep_efficiency": 0.0,
-      "combat_success_rate": 0.0
-    },
-    {
-      "kills_per_game": 0,
-      "deaths_per_game": 1,
-      "kd_ratio": 0.0,
-      "survival_time": 2920,
-      "weapons_acquired": 0,
-      "guardians_killed": 0,
-      "ep_efficiency": 0.0,
-      "combat_success_rate": 0.0
-    },
-    {
-      "kills_per_game": 0,
-      "deaths_per_game": 1,
-      "kd_ratio": 0.0,
-      "survival_time": 188,
-      "weapons_acquired": 0,
-      "guardians_killed": 0,
-      "ep_efficiency": 0.0,
-      "combat_success_rate": 0.0
-    },
-    {
-      "kills_per_game": 0,
-      "deaths_per_game": 1,
-      "kd_ratio": 0.0,
-      "survival_time": 2843,
-      "weapons_acquired": 0,
-      "guardians_killed": 0,
-      "ep_efficiency": 0.0,
-      "combat_success_rate": 0.0
-    },
-    {
-      "kills_per_game": 0,
-      "deaths_per_game": 1,
-      "kd_ratio": 0.0,
-      "survival_time": 2454,
-      "weapons_acquired": 0,
-      "guardians_killed": 0,
-      "ep_efficiency": 0.0,
-      "combat_success_rate": 0.0
-    },
-    {
-      "kills_per_game": 1,
-      "deaths_per_game": 1,
-      "kd_ratio": 1.0,
-      "survival_time": 768,
-      "weapons_acquired": 0,
-      "guardians_killed": 0,
-      "ep_efficiency": 0.0,
-      "combat_success_rate": 0.0
-    },
     {
       "kills_per_game": 0,
       "deaths_per_game": 1,
@@ -105,6 +25,86 @@
       "deaths_per_game": 1,
       "kd_ratio": 0.0,
       "survival_time": 3017,
+      "weapons_acquired": 0,
+      "guardians_killed": 0,
+      "ep_efficiency": 0.0,
+      "combat_success_rate": 0.0
+    },
+    {
+      "kills_per_game": 0,
+      "deaths_per_game": 1,
+      "kd_ratio": 0.0,
+      "survival_time": 2004,
+      "weapons_acquired": 0,
+      "guardians_killed": 0,
+      "ep_efficiency": 0.0,
+      "combat_success_rate": 0.0
+    },
+    {
+      "kills_per_game": 0,
+      "deaths_per_game": 1,
+      "kd_ratio": 0.0,
+      "survival_time": 2323,
+      "weapons_acquired": 0,
+      "guardians_killed": 0,
+      "ep_efficiency": 0.0,
+      "combat_success_rate": 0.0
+    },
+    {
+      "kills_per_game": 0,
+      "deaths_per_game": 1,
+      "kd_ratio": 0.0,
+      "survival_time": 3118,
+      "weapons_acquired": 0,
+      "guardians_killed": 0,
+      "ep_efficiency": 0.0,
+      "combat_success_rate": 0.0
+    },
+    {
+      "kills_per_game": 0,
+      "deaths_per_game": 1,
+      "kd_ratio": 0.0,
+      "survival_time": 2296,
+      "weapons_acquired": 0,
+      "guardians_killed": 0,
+      "ep_efficiency": 0.0,
+      "combat_success_rate": 0.0
+    },
+    {
+      "kills_per_game": 0,
+      "deaths_per_game": 1,
+      "kd_ratio": 0.0,
+      "survival_time": 3543,
+      "weapons_acquired": 0,
+      "guardians_killed": 0,
+      "ep_efficiency": 0.0,
+      "combat_success_rate": 0.0
+    },
+    {
+      "kills_per_game": 0,
+      "deaths_per_game": 1,
+      "kd_ratio": 0.0,
+      "survival_time": 2994,
+      "weapons_acquired": 0,
+      "guardians_killed": 0,
+      "ep_efficiency": 0.0,
+      "combat_success_rate": 0.0
+    },
+    {
+      "kills_per_game": 0,
+      "deaths_per_game": 1,
+      "kd_ratio": 0.0,
+      "survival_time": 2729,
+      "weapons_acquired": 0,
+      "guardians_killed": 0,
+      "ep_efficiency": 0.0,
+      "combat_success_rate": 0.0
+    },
+    {
+      "kills_per_game": 0,
+      "deaths_per_game": 1,
+      "kd_ratio": 0.0,
+      "survival_time": 2491,
       "weapons_acquired": 0,
       "guardians_killed": 0,
       "ep_efficiency": 0.0,

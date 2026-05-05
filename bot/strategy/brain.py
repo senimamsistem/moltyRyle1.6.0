@@ -1577,7 +1577,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         return {"action": "rest", "data": {},
                 "reason": f"⏸️ REST: EP={ep}/{max_ep}, area is safe (+1 bonus EP)"}
 
-    return None  # Wait for next turn
+    return None  # tunggu for next turn
 
 
 # ── Helper functions ──────────────────────────────────────────────────
