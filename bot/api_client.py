@@ -8,6 +8,7 @@ from typing import Optional
 from bot.config import API_BASE, SKILL_VERSION
 from bot.utils.logger import get_logger
 from bot.utils.rate_limiter import rest_limiter
+from bot.utils.resilience import with_resilience, api_circuit_breaker, RetryConfig
 
 log = get_logger(__name__)
 
@@ -60,20 +61,25 @@ class MoltyAPI:
                 log.warning("Unparseable API response: %s... err=%s", text[:120], e)
                 return {}
 
-    async def _request(self, method: str, path: str, **kwargs) -> dict:
-        """Rate-limited request with error handling."""
+    async def _request_with_resilience(self, method: str, path: str, **kwargs) -> dict:
+        """Internal request method dengan resilience."""
         await rest_limiter.acquire()
         await self._ensure_client()
         resp = await self._client.request(method, path, **kwargs)
 
-        # Handle version mismatch
+        # Handle version mismatch (permanent, don't retry)
         if resp.status_code == 426:
             raise APIError("VERSION_MISMATCH", "Skill version outdated", 426)
 
-        # Handle rate limiting
+        # Handle rate limiting (retryable)
         if resp.status_code == 429:
             log.warning("Rate limited (429). Backing off.")
             raise APIError("RATE_LIMITED", "Too many requests", 429)
+
+        # Handle server errors (retryable)
+        if resp.status_code >= 500:
+            log.warning("Server error %d. Will retry.", resp.status_code)
+            raise APIError("SERVER_ERROR", f"Server error: {resp.status_code}", resp.status_code)
 
         data = self._safe_parse_json(resp.text)
 
@@ -97,6 +103,22 @@ class MoltyAPI:
 
     # ── Account endpoints ─────────────────────────────────────────────
 
+    @with_resilience(
+        max_retries=3,
+        base_delay=1.0,
+        circuit_breaker="api_calls",
+        retryable_exceptions=(APIError, httpx.NetworkError, httpx.TimeoutException)
+    )
+    async def _request(self, method: str, path: str, **kwargs) -> dict:
+        """Rate-limited request with error handling dan retry logic."""
+        return await self._request_with_resilience(method, path, **kwargs)
+
+    @with_resilience(
+        max_retries=2,
+        base_delay=0.5,
+        circuit_breaker="api_calls",
+        retryable_exceptions=(APIError, httpx.NetworkError)
+    )
     async def create_account(self, name: str, wallet_address: str) -> dict:
         """POST /accounts — create account, returns apiKey (shown once!)."""
         log.info("Creating account: name=%s wallet=%s", name, wallet_address[:10] + "...")
@@ -105,6 +127,12 @@ class MoltyAPI:
             "wallet_address": wallet_address,
         })
 
+    @with_resilience(
+        max_retries=3,
+        base_delay=1.0,
+        circuit_breaker="api_calls",
+        retryable_exceptions=(APIError, httpx.NetworkError)
+    )
     async def get_accounts_me(self) -> dict:
         """GET /accounts/me — readiness check, state detection, balance."""
         return await self._request("GET", "/accounts/me")
@@ -117,6 +145,12 @@ class MoltyAPI:
 
     # ── Wallet & whitelist ────────────────────────────────────────────
 
+    @with_resilience(
+        max_retries=2,
+        base_delay=1.0,
+        circuit_breaker="api_calls",
+        retryable_exceptions=(APIError, httpx.NetworkError)
+    )
     async def create_wallet(self, owner_eoa: str) -> dict:
         """POST /create/wallet — create MoltyRoyale Wallet."""
         log.info("Creating MoltyRoyale Wallet for owner=%s", owner_eoa[:10] + "...")
@@ -133,6 +167,12 @@ class MoltyAPI:
 
     # ── Identity ──────────────────────────────────────────────────────
 
+    @with_resilience(
+        max_retries=2,
+        base_delay=0.5,
+        circuit_breaker="api_calls",
+        retryable_exceptions=(APIError, httpx.NetworkError)
+    )
     async def post_identity(self, agent_id: int) -> dict:
         """POST /api/identity — register ERC-8004 identity."""
         log.info("Registering identity: agentId=%d", agent_id)

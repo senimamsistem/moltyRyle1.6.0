@@ -23,6 +23,7 @@ from bot.dashboard.state import dashboard_state
 from bot.learning import record_match
 from bot.utils.rate_limiter import ws_limiter
 from bot.utils.logger import get_logger
+from bot.utils.resilience import ws_circuit_breaker, state_recovery, RetryConfig, GracefulDegradation, CircuitState
 
 log = get_logger(__name__)
 
@@ -98,6 +99,10 @@ class WebSocketEngine:
         self.agent_id = agent_id
         self.action_sender = ActionSender()
         self.ws = None
+        self._state_checkpoint_name = f"game_{game_id}"
+        self._last_action_timestamp = 0
+        self._reconnect_count = 0
+        self._max_reconnects = 5
         self.game_result = None
         self.last_view = None
         self._ping_task = None
@@ -160,9 +165,24 @@ class WebSocketEngine:
 
         while self._running and retry_count < max_retries:
             try:
+                # Check circuit breaker before attempting connection
+                if ws_circuit_breaker.state == CircuitState.OPEN:
+                    log.warning("🔒 WebSocket circuit breaker OPEN. Waiting for recovery...")
+                    await asyncio.sleep(30)
+                    retry_count += 1
+                    continue
+                    
                 log.info("Connecting WebSocket to %s...", WS_URL)
                 ws_url = WS_URL
                 log.info("Handshake with key: %s...", api_key[:8])
+                
+                # Try to recover previous state if reconnecting
+                if self._reconnect_count > 0:
+                    recovered_state = state_recovery.recover(self._state_checkpoint_name)
+                    if recovered_state:
+                        log.info("🔄 Recovered game state after reconnect")
+                        self._game_stats.update(recovered_state)
+                        
                 async with websockets.connect(
                     ws_url,
                     additional_headers=headers,
@@ -170,6 +190,7 @@ class WebSocketEngine:
                     max_size=2**20,  # 1MB max message
                     close_timeout=10,  # v15+ compatibility
                 ) as ws:
+                    self._reconnect_count = 0
                     result = await self._run_with_socket(ws)
                     if result is not None:
                         return result
@@ -177,14 +198,31 @@ class WebSocketEngine:
 
             except websockets.exceptions.ConnectionClosed as e:
                 retry_count += 1
+                self._reconnect_count += 1
                 # Fix: Ensure reason is always available
                 reason = getattr(e, 'reason', 'Unknown')
                 code = getattr(e, 'code', 'Unknown')
                 log.warning("WebSocket closed: code=%s reason=%s (retry %d/%d)",
                             code, reason, retry_count, max_retries)
+                
+                # Report to circuit breaker
+                await ws_circuit_breaker._on_failure()
+                
+                # Save state before reconnecting
+                state_recovery.checkpoint(self._state_checkpoint_name, {
+                    "kills": self._game_stats["kills"],
+                    "damage_dealt": self._game_stats["damage_dealt"],
+                    "damage_taken": self._game_stats["damage_taken"],
+                })
+                
                 if self._ping_task:
                     self._ping_task.cancel()
-                await asyncio.sleep(min(2 ** retry_count, 30))
+                    
+                # Exponential backoff dengan jitter
+                delay = min(2 ** retry_count, 30)
+                delay_with_jitter = delay * (0.5 + (hash(str(time.time())) % 1000) / 1000)
+                log.info("Reconnecting in %.1fs...", delay_with_jitter)
+                await asyncio.sleep(delay_with_jitter)
 
             except Exception as e:
                 retry_count += 1

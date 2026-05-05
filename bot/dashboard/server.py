@@ -232,6 +232,127 @@ async def api_import(request):
         return web.json_response({"error": str(e)}, status=400)
 
 
+async def api_health(request):
+    """Health check endpoint untuk monitoring."""
+    import time
+    from bot.learning.strategy_dna import StrategyDNA
+    
+    # Collect health metrics
+    dna = StrategyDNA()
+    history_count = len(dna.match_history)
+    
+    health_status = {
+        "status": "healthy",
+        "timestamp": time.time(),
+        "version": "1.6.0",
+        "components": {
+            "dashboard": "ok",
+            "learning": "ok" if history_count > 0 else "no_data",
+            "dna_ready": dna.dna is not None,
+        },
+        "metrics": {
+            "matches_recorded": history_count,
+            "dna_generation": dna.generation,
+        }
+    }
+    
+    # Determine overall status
+    if health_status["components"]["learning"] == "no_data":
+        health_status["status"] = "degraded"
+    
+    status_code = 200 if health_status["status"] == "healthy" else 503
+    return web.json_response(health_status, status=status_code)
+
+
+async def api_dna_backup(request):
+    """Create manual DNA backup."""
+    import shutil
+    from datetime import datetime
+    from bot.learning.strategy_dna import DNA_FILE
+    
+    try:
+        if not os.path.exists(DNA_FILE):
+            return web.json_response(
+                {"error": "No DNA file to backup"}, 
+                status=404
+            )
+        
+        # Create backup dengan timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = f"{DNA_FILE}.{timestamp}.backup"
+        
+        shutil.copy2(DNA_FILE, backup_path)
+        
+        return web.json_response({
+            "ok": True,
+            "backup_path": backup_path,
+            "timestamp": timestamp,
+            "message": f"DNA backed up to {backup_path}"
+        })
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def api_dna_list_backups(request):
+    """List available DNA backups."""
+    import glob
+    from bot.learning.strategy_dna import DNA_FILE
+    
+    backup_pattern = f"{DNA_FILE}.*.backup"
+    backups = glob.glob(backup_pattern)
+    
+    backup_info = []
+    for backup in sorted(backups, reverse=True)[:10]:  # Last 10
+        try:
+            stat = os.stat(backup)
+            backup_info.append({
+                "path": backup,
+                "created": stat.st_mtime,
+                "size": stat.st_size
+            })
+        except OSError:
+            pass
+    
+    return web.json_response({
+        "backups": backup_info,
+        "count": len(backup_info)
+    })
+
+
+async def api_dna_restore(request):
+    """Restore DNA from backup."""
+    import shutil
+    from bot.learning.strategy_dna import DNA_FILE
+    
+    try:
+        data = await request.json()
+        backup_path = data.get("backup_path")
+        
+        if not backup_path or not os.path.exists(backup_path):
+            return web.json_response(
+                {"error": "Backup not found"}, 
+                status=404
+            )
+        
+        # Create current backup sebelum restore
+        if os.path.exists(DNA_FILE):
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            pre_restore_backup = f"{DNA_FILE}.{timestamp}.prerestore"
+            shutil.copy2(DNA_FILE, pre_restore_backup)
+        
+        # Restore
+        shutil.copy2(backup_path, DNA_FILE)
+        
+        return web.json_response({
+            "ok": True,
+            "message": "DNA restored successfully",
+            "restored_from": backup_path
+        })
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
 def create_app() -> web.Application:
     """Create the aiohttp web application."""
     app = web.Application()
@@ -244,6 +365,10 @@ def create_app() -> web.Application:
     app.router.add_get("/api/learning", api_learning)
     app.router.add_get("/api/export", api_export)
     app.router.add_post("/api/import", api_import)
+    app.router.add_get("/api/health", api_health)
+    app.router.add_post("/api/dna/backup", api_dna_backup)
+    app.router.add_get("/api/dna/backups", api_dna_list_backups)
+    app.router.add_post("/api/dna/restore", api_dna_restore)
     app.router.add_get("/ws", ws_handler)
 
     # Static files

@@ -30,139 +30,21 @@ from bot.config import (
 )
 from bot.learning.strategy_dna import get_dna
 from bot.autonomous_ai import autonomous_ai
+from bot.strategy.constants import (
+    WEAPONS, WEAPON_STRATEGIES, WEATHER_COMBAT_PENALTY,
+    WEAPON_PRIORITY, ITEM_PRIORITY, RECOVERY_ITEMS
+)
+from bot.strategy.combat_predictor import (
+    CombatPredictor, CombatFactors, combat_predictor,
+    should_engange_with_prediction
+)
+from bot.learning.enemy_profiler import enemy_profiler, get_enemy_intelligence
 
 log = get_logger(__name__)
 
-# ── Weapon stats from combat-items.md ─────────────────────────────────
-WEAPONS = {
-    "fist": {"bonus": 0, "range": 0},
-    "dagger": {"bonus": 10, "range": 0},
-    "sword": {"bonus": 20, "range": 0},
-    "katana": {"bonus": 35, "range": 0},
-    "bow": {"bonus": 5, "range": 1},
-    "pistol": {"bonus": 10, "range": 1},
-    "sniper": {"bonus": 28, "range": 2},
-}
+# Note: Constants are imported from bot.strategy.constants
+# WEAPONS, WEAPON_STRATEGIES, WEATHER_COMBAT_PENALTY, etc.
 
-WEAPON_PRIORITY = ["katana", "sniper", "sword", "pistol", "dagger", "bow", "fist"]
-
-# ── Item priority for pickup ──────────────────────────────────────────
-# Moltz = ALWAYS pickup (highest). Weapons > healing > utility.
-# Binoculars = passive (vision+1 just by holding), always pickup.
-ITEM_PRIORITY = {
-    "rewards": 300,  # Moltz/sMoltz - ALWAYS pickup first
-    "katana": 120, "sniper": 115, "sword": 110, "pistol": 105,
-    "dagger": 100, "bow": 95,
-    "medkit": 70, "bandage": 65, "emergency_food": 60, "energy_drink": 58,
-    "binoculars": 55,  # Passive: vision +1 permanent, always pickup
-    "map": 52,         # Reveal entire map (consumable/one-time)
-    "megaphone": 0,    # Global broadcast (consumable) - DO NOT PICKUP
-    "moltz": 10,       # Ground currency (pickup if nothing else)
-}
-
-# ── Recovery items for healing (combat-items.md) ──────────────────────
-# For normal healing (HP<70): prefer Emergency Food (save Bandage/Medkit)
-# For critical healing (HP<30): prefer Bandage then Medkit
-RECOVERY_ITEMS = {
-    "medkit": 50, "bandage": 30, "emergency_food": 20,
-    "energy_drink": 0,  # EP restore, not HP
-}
-
-# Weather combat penalty per game-systems.md
-WEATHER_COMBAT_PENALTY = {
-    "clear": 0.0,
-    "rain": 0.05,   # -5%
-    "fog": 0.10,    # -10%
-    "storm": 0.15,  # -15%
-}
-
-# ── Weapon-Specific Strategy Configurations ─────────────────────────────
-WEAPON_STRATEGIES = {
-    "sniper": {
-        "range": 2,
-        "damage": 30,
-        "style": "ranged_aggressive",
-        "engagement_range": 2,  # Maximum engagement range
-        "min_hp_threshold": 20,  # Fight even with low HP
-        "flee_threshold": 0.1,  # Very low flee chance
-        "finisher_threshold": 40,  # Lower finisher threshold
-        "priority_targets": "any",  # Attack any target regardless of stats
-        "movement_style": "kiting",  # Keep distance
-        "combat_preference": "offensive",  # Always attack
-    },
-    "katana": {
-        "range": 0,
-        "damage": 25,
-        "style": "melee_aggressive",
-        "engagement_range": 0,  # Same region only
-        "min_hp_threshold": 40,  # Higher HP threshold for melee
-        "flee_threshold": 0.3,  # Moderate flee chance
-        "finisher_threshold": 35,  # Lower finisher threshold
-        "priority_targets": "weaker",  # Target weaker enemies
-        "movement_style": "closing",  # Close distance
-        "combat_preference": "aggressive",  # Strong melee preference
-    },
-    "sword": {
-        "range": 0,
-        "damage": 20,
-        "style": "melee_balanced",
-        "engagement_range": 0,  # Same region only
-        "min_hp_threshold": 50,  # Balanced HP threshold
-        "flee_threshold": 0.4,  # Moderate flee chance
-        "finisher_threshold": 45,  # Standard finisher threshold
-        "priority_targets": "balanced",  # Balanced target selection
-        "movement_style": "tactical",  # Tactical positioning
-        "combat_preference": "balanced",  # Balanced approach
-    },
-    "dagger": {
-        "range": 0,
-        "damage": 15,
-        "style": "melee_fast",
-        "engagement_range": 0,  # Same region only
-        "min_hp_threshold": 60,  # High HP threshold for weak weapon
-        "flee_threshold": 0.6,  # High flee chance
-        "finisher_threshold": 55,  # High finisher threshold
-        "priority_targets": "finishers",  # Target very weak enemies
-        "movement_style": "hit_and_run",  # Quick strikes
-        "combat_preference": "opportunistic",  # Only favorable fights
-    },
-    "pistol": {
-        "range": 1,
-        "damage": 18,
-        "style": "ranged_balanced",
-        "engagement_range": 1,  # Adjacent regions
-        "min_hp_threshold": 45,  # Balanced HP threshold
-        "flee_threshold": 0.4,  # Moderate flee chance
-        "finisher_threshold": 50,  # Standard finisher threshold
-        "priority_targets": "balanced",  # Balanced target selection
-        "movement_style": "positioning",  # Good positioning
-        "combat_preference": "tactical",  # Tactical ranged combat
-    },
-    "bow": {
-        "range": 1,
-        "damage": 12,
-        "style": "ranged_defensive",
-        "engagement_range": 1,  # Adjacent regions
-        "min_hp_threshold": 55,  # Higher HP threshold for weak ranged
-        "flee_threshold": 0.5,  # Higher flee chance
-        "finisher_threshold": 60,  # High finisher threshold
-        "priority_targets": "finishers",  # Target weak enemies
-        "movement_style": "kiting",  # Keep distance
-        "combat_preference": "defensive",  # Defensive ranged combat
-    },
-    "fist": {
-        "range": 0,
-        "damage": 5,
-        "style": "melee_defensive",
-        "engagement_range": 0,  # Same region only
-        "min_hp_threshold": 80,  # Very high HP threshold
-        "flee_threshold": 0.8,  # Very high flee chance
-        "finisher_threshold": 70,  # Very high finisher threshold
-        "priority_targets": "finishers",  # Only very weak enemies
-        "movement_style": "evasive",  # Avoid combat
-        "combat_preference": "defensive",  # Only fight when necessary
-    }
-}
 
 def calc_damage(atk: int, weapon_bonus: int, target_def: int,
                 weather: str = "clear") -> int:
@@ -858,27 +740,90 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 return {"action": "move", "data": {"regionId": safe},
                         "reason": "EARLY_GAME: Abandon combat hotspot for safety"}
     
-    # MID-HIGH GAME: Use weapon-specific logic
+    # MID-HIGH GAME: Use weapon-specific logic + COMBAT PREDICTION
     elif phase_strategy in ["WEAPON_SPECIFIC", "COMBAT_DOMINANCE"]:
         if enemies_here and equipped:
-            # Use weapon-specific decision making
+            # 🧠 ENHANCED: Use probability-based combat prediction
             for enemy in enemies_here:
-                should_engage, reason = _should_engage_enemy(enemy, hp, ep, equipped, 
-                                                           AGGRESSION_LEVEL, region_weather)
+                enemy_id = enemy.get("id", "unknown")
                 
-                if should_engage:
-                    # Check if we should flee instead
-                    should_flee, flee_reason = _should_flee_from_enemy(enemy, hp, equipped, 
-                                                                       AGGRESSION_LEVEL)
+                # Check if we have profile untuk this enemy
+                if enemy_id in enemy_profiler.profiles:
+                    # Get enemy intelligence
+                    intel = get_enemy_intelligence(enemy_id, {
+                        "our_weapon": equipped.get("typeId", "fist"),
+                        "enemy_weapon": (enemy.get("equippedWeapon") or {}).get("typeId", "fist"),
+                        "our_hp": hp,
+                        "enemy_hp": enemy.get("hp", 100)
+                    })
                     
-                    if not should_flee:
-                        log.info("⚔️ %s: Engaging %s - %s", 
-                                 _get_weapon_strategy(equipped)["style"].upper(),
-                                 enemy.get("name", "?"), reason)
-                        _track_attack(attack_type="melee")
-                        return {"action": "attack",
-                                "data": {"targetId": enemy["id"], "targetType": "agent"},
-                                "reason": f"{_get_weapon_strategy(equipped)['style'].upper()}: {enemy.get('name','?')} - {reason}"}
+                    log.info("🧠 ENEMY_INTEL: %s", intel["profile_summary"])
+                    log.info("🧠 COUNTER_STRAT: %s", intel["counter_strategy"])
+                
+                # 🎯 Use combat prediction engine
+                should_attack, reason, prediction = should_engange_with_prediction(
+                    enemy=enemy,
+                    hp=hp,
+                    ep=ep,
+                    equipped=equipped,
+                    inventory=inventory,
+                    terrain=region_terrain,
+                    weather=region_weather,
+                    alive_count=alive_count,
+                    connections=connections,
+                    aggression=AGGRESSION_LEVEL.lower()
+                )
+                
+                # Log prediction details
+                if prediction:
+                    log.info("🎯 COMBAT_PRED: %s",
+                             combat_predictor.get_prediction_for_display(
+                                 CombatFactors(
+                                     hp=hp, max_hp=100, ep=ep, atk=atk, defense=defense,
+                                     weapon_bonus=WEAPONS.get(equipped.get("typeId","fist"), {}).get("bonus", 0),
+                                     weapon_range=WEAPONS.get(equipped.get("typeId","fist"), {}).get("range", 0),
+                                     weapon_type=equipped.get("typeId", "fist"),
+                                     healing_items=healing_count,
+                                     enemy_hp=enemy.get("hp", 100),
+                                     enemy_max_hp=100,
+                                     enemy_atk=enemy.get("atk", 10),
+                                     enemy_def=enemy.get("def", 5),
+                                     enemy_weapon_bonus=WEAPONS.get(
+                                         (enemy.get("equippedWeapon") or {}).get("typeId", "fist"),
+                                         {"bonus": 0}
+                                     )["bonus"],
+                                     enemy_weapon_type=(enemy.get("equippedWeapon") or {}).get("typeId", "fist"),
+                                     terrain=region_terrain,
+                                     weather=region_weather,
+                                     is_surrounded=len(enemies_here) > 2,
+                                     escape_routes=len(connections),
+                                     alive_count=alive_count,
+                                     game_phase="mid" if alive_count >= 30 else "late"
+                                 )
+                             ))
+                
+                if should_attack:
+                    log.info("⚔️ %s: Engaging %s - %s", 
+                             _get_weapon_strategy(equipped)["style"].upper(),
+                             enemy.get("name", "?"), reason)
+                    _track_attack(attack_type="melee")
+                    
+                    # Record encounter untuk learning
+                    enemy_profiler.record_encounter(
+                        enemy_id=enemy_id,
+                        enemy_name=enemy.get("name", "Unknown"),
+                        our_hp=hp,
+                        our_weapon=equipped.get("typeId", "fist"),
+                        enemy_hp=enemy.get("hp", 100),
+                        enemy_weapon=(enemy.get("equippedWeapon") or {}).get("typeId", "fist"),
+                        terrain=region_terrain,
+                        weather=region_weather,
+                        outcome="engaged"  # Will update after combat
+                    )
+                    
+                    return {"action": "attack",
+                            "data": {"targetId": enemy["id"], "targetType": "agent"},
+                            "reason": f"{_get_weapon_strategy(equipped)['style'].upper()}: {enemy.get('name','?')} - {reason}"}
 
     # ── Priority 5: COMBAT PREPARATION (Equip weapons immediately!) ─────────
     # CRITICAL: Auto-equip weapon anytime available - always be ready for combat!

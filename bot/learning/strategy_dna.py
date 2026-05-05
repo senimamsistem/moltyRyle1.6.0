@@ -223,13 +223,45 @@ class StrategyDNA:
         
         return max(0, fitness)  # Ensure non-negative
     
+    def _backup_dna_before_evolution(self):
+        """Create automatic backup before DNA evolution for safety"""
+        import shutil
+        from datetime import datetime
+        
+        try:
+            if not os.path.exists(DNA_FILE):
+                return
+                
+            # Create timestamped backup
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = f"{DNA_FILE}.{timestamp}.autobackup"
+            
+            shutil.copy2(DNA_FILE, backup_path)
+            log.info("💾 DNA auto-backup created: %s", backup_path)
+            
+            # Clean old backups (keep last 5 auto-backups)
+            import glob
+            auto_backups = sorted(glob.glob(f"{DNA_FILE}.*.autobackup"))[:-5]
+            for old_backup in auto_backups:
+                try:
+                    os.remove(old_backup)
+                    log.debug("Cleaned old DNA backup: %s", old_backup)
+                except OSError:
+                    pass
+                    
+        except Exception as e:
+            log.warning("⚠️ DNA backup failed (non-critical): %s", e)
+    
     def _evolve(self):
         """
         Genetic evolution - improved algorithm with:
         - 10-20 recent matches window
         - Differential scoring (match-to-match improvement)
         - Anti-outlier protection (requires consensus, not single outlier)
+        - Automatic pre-evolution backup
         """
+        # SAFETY: Backup current DNA before any evolution
+        self._backup_dna_before_evolution()
         # IMPROVED: Use last 10-20 matches for better statistical significance
         MATCH_WINDOW = min(20, max(10, len(self.match_history) // 3))
         recent_matches = self.match_history[-MATCH_WINDOW:]
