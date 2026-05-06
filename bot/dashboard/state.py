@@ -247,5 +247,5 @@ class DashboardState:
 dashboard_state = DashboardState()
 
 # Add app property for compatibility with main.py
-from bot.dashboard.server import create_app
-dashboard_state.app = create_app()
+from bot.dashboard.server import app
+dashboard_state.app = app

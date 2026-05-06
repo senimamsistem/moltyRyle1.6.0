@@ -1,11 +1,13 @@
 """
 Dashboard web server — serves the UI and real-time WebSocket updates.
-Uses aiohttp for lightweight async HTTP + WebSocket.
+Uses FastAPI for uvicorn compatibility.
 """
 import os
 import json
 import asyncio
-from aiohttp import web
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from bot.dashboard.state import dashboard_state
 from bot.learning.strategy_dna import DEFAULT_DNA, StrategyDNA, DNA_FILE, MATCH_HISTORY_FILE, sanitize_dna
 from bot.utils.logger import get_logger
@@ -19,36 +21,46 @@ STATIC_DIR = os.path.join(DASHBOARD_DIR, "static")
 _ws_clients: set = set()
 
 
-async def index_handler(request):
+# FastAPI app
+app = FastAPI(title="Molty Royale Dashboard")
+
+@app.get("/", response_class=HTMLResponse)
+async def index_handler():
     """Serve the dashboard HTML (no cache to always get latest)."""
     html_path = os.path.join(STATIC_DIR, "index.html")
-    resp = web.FileResponse(html_path)
-    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    resp.headers["Pragma"] = "no-cache"
-    return resp
+    with open(html_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    return HTMLResponse(content, headers={
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache"
+    })
 
 
-async def api_state(request):
+@app.get("/api/state")
+async def api_state():
     """Return full dashboard state snapshot."""
-    return web.json_response(dashboard_state.get_snapshot())
+    return JSONResponse(dashboard_state.get_snapshot())
 
 
-async def api_accounts(request):
+@app.get("/api/accounts")
+async def api_accounts():
     """Return accounts list."""
-    return web.json_response({"accounts": dashboard_state.accounts})
+    return JSONResponse({"accounts": dashboard_state.accounts})
 
 
-async def api_export(request):
+@app.get("/api/export")
+async def api_export():
     """Export all data as JSON download."""
     data = dashboard_state.get_snapshot()
-    return web.json_response(data, headers={
+    return JSONResponse(data, headers={
         "Content-Disposition": "attachment; filename=molty-export.json"
     })
 
 
-async def api_evolution(request):
+@app.get("/api/evolution")
+async def api_evolution():
     """Return evolution data for dashboard."""
-    return web.json_response(dashboard_state.get_evolution_data())
+    return JSONResponse(dashboard_state.get_evolution_data())
 
 
 def _load_json_file(path: str, fallback):
@@ -215,29 +227,30 @@ async def stop_push_loop(app):
             pass
 
 
-async def api_accounts_post(request):
+@app.post("/api/accounts")
+async def api_accounts_post(request_data: dict):
     """Save account from dashboard form."""
     try:
-        data = await request.json()
-        dashboard_state.set_account(data)
-        return web.json_response({"ok": True})
+        dashboard_state.set_account(request_data)
+        return JSONResponse({"ok": True})
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=400)
+        return JSONResponse({"error": str(e)}, status_code=400)
 
 
-async def api_import(request):
+@app.post("/api/import")
+async def api_import(request_data: dict):
     """Import data from JSON."""
     try:
-        data = await request.json()
-        if "accounts" in data:
-            for acc in data["accounts"]:
+        if "accounts" in request_data:
+            for acc in request_data["accounts"]:
                 dashboard_state.set_account(acc)
-        return web.json_response({"ok": True})
+        return JSONResponse({"ok": True})
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=400)
+        return JSONResponse({"error": str(e)}, status_code=400)
 
 
-async def api_health(request):
+@app.get("/api/health")
+async def api_health():
     """Health check endpoint untuk monitoring."""
     import time
     from bot.learning.strategy_dna import StrategyDNA
@@ -266,10 +279,11 @@ async def api_health(request):
         health_status["status"] = "degraded"
     
     status_code = 200 if health_status["status"] == "healthy" else 503
-    return web.json_response(health_status, status=status_code)
+    return JSONResponse(health_status, status_code=status_code)
 
 
-async def api_dna_backup(request):
+@app.post("/api/dna/backup")
+async def api_dna_backup():
     """Create manual DNA backup."""
     import shutil
     from datetime import datetime
@@ -277,9 +291,9 @@ async def api_dna_backup(request):
     
     try:
         if not os.path.exists(DNA_FILE):
-            return web.json_response(
+            return JSONResponse(
                 {"error": "No DNA file to backup"}, 
-                status=404
+                status_code=404
             )
         
         # Create backup dengan timestamp
@@ -288,17 +302,18 @@ async def api_dna_backup(request):
         
         shutil.copy2(DNA_FILE, backup_path)
         
-        return web.json_response({
+        return JSONResponse({
             "ok": True,
             "backup_path": backup_path,
             "timestamp": timestamp,
             "message": f"DNA backed up to {backup_path}"
         })
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-async def api_dna_list_backups(request):
+@app.get("/api/dna/backups")
+async def api_dna_list_backups():
     """List available DNA backups."""
     import glob
     from bot.learning.strategy_dna import DNA_FILE
@@ -318,25 +333,25 @@ async def api_dna_list_backups(request):
         except OSError:
             pass
     
-    return web.json_response({
+    return JSONResponse({
         "backups": backup_info,
         "count": len(backup_info)
     })
 
 
-async def api_dna_restore(request):
+@app.post("/api/dna/restore")
+async def api_dna_restore(request_data: dict):
     """Restore DNA from backup."""
     import shutil
     from bot.learning.strategy_dna import DNA_FILE
     
     try:
-        data = await request.json()
-        backup_path = data.get("backup_path")
+        backup_path = request_data.get("backup_path")
         
         if not backup_path or not os.path.exists(backup_path):
-            return web.json_response(
+            return JSONResponse(
                 {"error": "Backup not found"}, 
-                status=404
+                status_code=404
             )
         
         # Create current backup sebelum restore
@@ -349,52 +364,47 @@ async def api_dna_restore(request):
         # Restore
         shutil.copy2(backup_path, DNA_FILE)
         
-        return web.json_response({
+        return JSONResponse({
             "ok": True,
             "message": "DNA restored successfully",
             "restored_from": backup_path
         })
     except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-def create_app() -> web.Application:
-    """Create the aiohttp web application."""
-    app = web.Application()
-
-    # Routes
-    app.router.add_get("/", index_handler)
-    app.router.add_get("/api/state", api_state)
-    app.router.add_get("/api/accounts", api_accounts)
-    app.router.add_post("/api/accounts", api_accounts_post)
-    app.router.add_get("/api/learning", api_learning)
-    app.router.add_get("/api/evolution", api_evolution)
-    app.router.add_get("/api/export", api_export)
-    app.router.add_post("/api/import", api_import)
-    app.router.add_get("/api/health", api_health)
-    app.router.add_post("/api/dna/backup", api_dna_backup)
-    app.router.add_get("/api/dna/backups", api_dna_list_backups)
-    app.router.add_post("/api/dna/restore", api_dna_restore)
-    app.router.add_get("/ws", ws_handler)
-
-    # Static files
-    if os.path.exists(STATIC_DIR):
-        app.router.add_static("/static/", STATIC_DIR)
-
-    # Background push loop — uses aiohttp lifecycle hooks (reliable)
-    app.on_startup.append(start_push_loop)
-    app.on_cleanup.append(stop_push_loop)
-
-    return app
+# Add missing endpoints
+@app.get("/api/learning")
+async def api_learning():
+    """Return learning data for dashboard."""
+    try:
+        from bot.learning.strategy_dna import StrategyDNA, DEFAULT_DNA
+        dna = StrategyDNA()
+        
+        return JSONResponse({
+            "dna": dna.dna,
+            "default_dna": DEFAULT_DNA,
+            "generation": dna.generation,
+            "match_count": len(dna.match_history)
+        })
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
-async def start_dashboard(port: int = 8080):
-    """Start the dashboard server (non-blocking)."""
-    app = create_app()
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    log.info("===========================================")
-    log.info("  Dashboard running at http://0.0.0.0:%d", port)
-    log.info("===========================================")
+# Add WebSocket support
+@app.websocket("/ws")
+async def ws_handler(websocket: WebSocket):
+    """WebSocket endpoint for real-time updates."""
+    await websocket.accept()
+    _ws_clients.add(websocket)
+    try:
+        while True:
+            # Keep connection alive
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        _ws_clients.discard(websocket)
+
+
+# Mount static files
+if os.path.exists(STATIC_DIR):
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
