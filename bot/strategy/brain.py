@@ -1097,7 +1097,8 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 return {"action": "pickup", "data": {"itemId": best_weapon["id"]},
                         "reason": f"COMBAT DEFENSE: Picking up {best_weapon.get('typeId','weapon')} for protection"}
 
-    # ── Priority 2: AGGRESSIVE SNIPER COMBAT (Before cooldown check!) ─────────
+    # ── Priority 5: SMART AGENT COMBAT (Prioritize players if we have good gear/resources) ─────────
+    # AGGRESSIVE SNIPER: Attack ANY enemy in range regardless of weapon/HP/EP
     # AGGRESSIVE SNIPER: Attack ANY enemy in range regardless of weapon/HP/EP
     # Sniper advantage = range attack, no restrictions for sniper users
     weather_ok = region_weather not in ("storm", "fog") or w_range >= 1
@@ -1225,7 +1226,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                             "data": {"targetId": target["id"], "targetType": "agent"},
                             "reason": f"RANGED FINISHER: Killing weak {target.get('name','?')} (HP={target.get('hp')}) with {w_type}"}
 
-    # ── Priority 5: Free actions (pickup, equip) ─────────────────
+    # ── Priority 4: Free actions (pickup, equip) ─────────────────
     # Moderate healing in safe area
     elif hp < HP_MODERATE_THRESHOLD and not enemies_here:
         heal = _find_healing_item(inventory, critical=False)
@@ -1727,12 +1728,6 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                         if resolved:
                             conn_connections = resolved.get("connections", [])
                             conn_adjacent = set(_get_region_id(c) for c in conn_connections)
-                            if any(g_rid in conn_adjacent for g_rid in guardian_nearby_regions):
-                                log.info("🏹 SNIPER_APPROACH: Moving to range 2 position near guardian")
-                                return {"action": "move", "data": {"regionId": conn_rid},
-                                        "reason": "SNIPER_APPROACH: Positioning for range 2 shot on guardian"}
-
-    # ── Priority 8: Guardian farming (120 sMoltz per kill!) ────────
     # Only farm if: HP is safe + we can win the fight + EP budget for chase
     guardians = [a for a in visible_agents
                  if a.get("isGuardian", False) and a.get("isAlive", True)]
