@@ -1896,38 +1896,86 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                     "reason": f"EP CRISIS: Resting untuk EP recovery (DZ threat)"}
     
     if not has_targets and ep >= move_ep_cost and not enemies_here:
-        # FORCE EXPLORATION: Never stay idle when EP is sufficient and no enemies
-        log.info("EXPLORE_FORCE: No targets detected, EP=%d sufficient - forcing exploration", ep)
+        # INTELLIGENT MOVEMENT: Based on enemy scanning results
+        log.info("INTELLIGENT_MOVE: No targets - using enemy scan data for decision (EP=%d, HP=%d, Weapon=%s)", 
+                 ep, hp, equipped.get("typeId", "none") if equipped else "none")
         
-        # Try unvisited regions first
-        for conn in connections:
-            rid = _get_region_id(conn)
-            if rid and rid not in danger_ids and rid not in _visited_regions and rid != region_id:
-                resolved = _resolve_region(conn, {"visibleRegions": visible_regions})
-                terrain = resolved.get("terrain", "").lower() if resolved else ""
-                
-                # COMBAT HOTSPOT INTEGRATION: Check combat intensity
-                combat_intensity = _combat_hotspots.get(rid, 0) if _combat_hotspots else 0
-                
-                # Early game: avoid combat hotspots even for exploration
-                if alive_count >= 80 and combat_intensity > 5:
-                    log.info("🔍 EXPLORE_AVOID_HOTSPOT: Skipping %s (intensity=%d) - early game", 
-                             rid[:8], combat_intensity)
-                    continue
-                
-                # High game: prefer combat hotspots when ready
-                if alive_count < 30 and has_weapon and healing_count >= 1 and combat_intensity > 3:
-                    log.info("👑 EXPLORE_SEEK_HOTSPOT: Prioritizing %s (intensity=%d) - high game", 
-                             rid[:8], combat_intensity)
-                
-                # Avoid dangerous terrain when not ready for combat
-                if terrain not in ("water",) or (has_weapon and healing_count >= 1):
-                    hotspot_info = f" (combat={combat_intensity})" if combat_intensity > 0 else ""
-                    log.info("EXPLORE_NEW: Moving to unvisited %s (terrain=%s)%s", rid[:8], terrain, hotspot_info)
-                    _consecutive_idle_turns = 0
-                    decide_action._consecutive_idle_turns = 0
-                    return {"action": "move", "data": {"regionId": rid},
-                            "reason": f"EXPLORE: Seeking new region (terrain={terrain})"}
+        # Analyze enemy situation from scanning results
+        enemy_analysis = {
+            "total_enemies": len(enemies),
+            "enemies_in_range": len(enemies_in_range),
+            "finishers_available": len([e for e in enemies if e.get("hp", 100) <= 50]),
+            "our_weapon_strength": WEAPONS.get(equipped.get("typeId", "").lower(), {}).get("bonus", 0) if equipped else 0,
+            "avg_enemy_hp": sum(e.get("hp", 100) for e in enemies) / len(enemies) if enemies else 100
+        }
+        
+        # DECISION LOGIC BASED ON ENEMY ANALYSIS
+        move_decision = None
+        
+        # CASE 1: NO ENEMIES VISIBLE - Focus on loot and resources
+        if enemy_analysis["total_enemies"] == 0:
+            log.info("MOVE_CASE: NO_ENEMIES - Prioritizing loot-rich areas")
+            # Use existing movement scoring with loot priority
+            best_region = _find_best_region_for_loot(connections, item_region_scores, danger_ids, _visited_regions, region_id)
+            if best_region:
+                move_decision = {"action": "move", "data": {"regionId": best_region},
+                               "reason": f"NO_ENEMIES: Moving to loot-rich area"}
+        
+        # CASE 2: ENEMIES IN RANGE - Tactical positioning
+        elif enemy_analysis["enemies_in_range"] > 0:
+            log.info("MOVE_CASE: ENEMIES_IN_RANGE - Tactical positioning (enemies=%d, our_weapon=%s)", 
+                     enemy_analysis["enemies_in_range"], equipped.get("typeId", "none") if equipped else "none")
+            
+            if equipped and enemy_analysis["our_weapon_strength"] >= 10:
+                # Strong weapon - engage or maintain optimal range
+                best_target = _select_weakest(enemies_in_range)
+                if best_target and hp >= 30:  # Sufficient HP for combat
+                    log.info("TACTICAL_ENGAGE: Strong weapon - attacking weakest enemy")
+                    _track_attack(attack_type="ranged")
+                    move_decision = {"action": "attack", "data": {"targetId": best_target["id"], "targetType": "agent"},
+                                   "reason": f"TACTICAL: Strong weapon engaging {best_target.get('name','?')}"}
+                else:
+                    # Maintain distance for ranged advantage
+                    best_region = _find_best_defensive_position(connections, enemies_in_range, danger_ids, _visited_regions, region_id)
+                    if best_region:
+                        move_decision = {"action": "move", "data": {"regionId": best_region},
+                                       "reason": "TACTICAL: Maintaining ranged position"}
+            else:
+                # Weak weapon - avoid combat, seek better equipment
+                log.info("TACTICAL_AVOID: Weak weapon - seeking better equipment")
+                best_region = _find_safe_region_with_exit(connections, danger_ids, view)
+                if best_region:
+                    move_decision = {"action": "move", "data": {"regionId": best_region},
+                                   "reason": "TACTICAL: Avoiding combat - seeking better weapon"}
+        
+        # CASE 3: ENEMIES VISIBLE BUT NOT IN RANGE - Approach or avoid
+        elif enemy_analysis["total_enemies"] > 0:
+            log.info("MOVE_CASE: ENEMIES_VISIBLE - Approach or avoid (enemies=%d, avg_hp=%d)", 
+                     enemy_analysis["total_enemies"], enemy_analysis["avg_enemy_hp"])
+            
+            # Check if we can win based on weapon and HP
+            can_win = (equipped and enemy_analysis["our_weapon_strength"] >= 10 and 
+                       hp >= 40 and enemy_analysis["avg_enemy_hp"] < hp * 0.8)
+            
+            if can_win:
+                # Approach for combat
+                closest_enemy = min(enemies, key=lambda e: _calculate_distance_to_enemy(e, region_id))
+                log.info("TACTICAL_APPROACH: Confident - approaching enemy %s", closest_enemy.get("name", "?"))
+                move_decision = {"action": "move", "data": {"regionId": closest_enemy.get("regionId")},
+                               "reason": f"TACTICAL: Approaching enemy {closest_enemy.get('name','?')}"}
+            else:
+                # Avoid combat - seek resources
+                log.info("TACTICAL_AVOID: Not confident - avoiding combat")
+                best_region = _find_safe_region_with_exit(connections, danger_ids, view)
+                if best_region:
+                    move_decision = {"action": "move", "data": {"regionId": best_region},
+                                   "reason": "TACTICAL: Avoiding superior enemies"}
+        
+        # Execute decision if found
+        if move_decision:
+            _consecutive_idle_turns = 0
+            decide_action._consecutive_idle_turns = 0
+            return move_decision
         
         # If all visited, move to any safe connected region
         for conn in connections:
@@ -1941,6 +1989,65 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 decide_action._consecutive_idle_turns = 0
                 return {"action": "move", "data": {"regionId": rid},
                         "reason": f"EXPLORE: Continuous exploration (terrain={terrain})"}
+
+
+def _find_best_region_for_loot(connections, item_region_scores, danger_ids, visited_regions, current_region_id):
+    """Find best region for loot gathering."""
+    best_region = None
+    best_score = -999
+    
+    for conn in connections:
+        rid = _get_region_id(conn)
+        if rid and rid not in danger_ids and rid != current_region_id:
+            loot_score = item_region_scores.get(rid, 0)
+            # Prioritize unvisited regions with loot
+            visit_bonus = 20 if rid not in visited_regions else 0
+            total_score = loot_score + visit_bonus
+            
+            if total_score > best_score:
+                best_score = total_score
+                best_region = rid
+    
+    return best_region
+
+
+def _find_best_defensive_position(connections, enemies_in_range, danger_ids, visited_regions, current_region_id):
+    """Find best defensive position for ranged combat."""
+    best_region = None
+    best_score = -999
+    
+    for conn in connections:
+        rid = _get_region_id(conn)
+        if rid and rid not in danger_ids and rid != current_region_id:
+            # Count enemies adjacent to this region
+            adjacent_enemies = 0
+            for enemy in enemies_in_range:
+                enemy_region = enemy.get("regionId", "")
+                # Simple adjacency check (regions are connected)
+                if enemy_region in [conn]:  # Enemy would be adjacent if we move here
+                    adjacent_enemies += 1
+            
+            # Score: Lower is better (fewer adjacent enemies)
+            score = 50 - (adjacent_enemies * 10)
+            
+            # Prefer unvisited regions
+            if rid not in visited_regions:
+                score += 15
+            
+            if score > best_score:
+                best_score = score
+                best_region = rid
+    
+    return best_region
+
+
+def _calculate_distance_to_enemy(enemy, current_region_id):
+    """Calculate simple distance to enemy (adjacent = 1, same = 0)."""
+    enemy_region = enemy.get("regionId", "")
+    if enemy_region == current_region_id:
+        return 0
+    # Assume all connections are adjacent (distance 1)
+    return 1
     
     # Only increment idle counter if truly no movement possible
     if not has_targets and ep < move_ep_cost:
@@ -3165,6 +3272,23 @@ def _choose_move_target(connections, danger_ids: set,
         elif type_id in ("binoculars", "map"):
             score += 10
 
+        # HEALING ITEMS: Higher priority when HP is low
+        elif type_id in RECOVERY_ITEMS:
+            if hp <= 20:
+                score += 25  # Critical healing priority
+            elif hp <= 40:
+                score += 15  # Moderate healing priority
+            else:
+                score += 8   # Low healing priority
+
+        # WEAPONS: Higher priority when unarmed
+        elif category == "weapon" or type_id.lower() in WEAPONS:
+            if not equipped:
+                score += 20  # High priority for weapons when unarmed
+            else:
+                weapon_bonus = WEAPONS.get(type_id.lower(), {}).get("bonus", 0)
+                score += 10 + weapon_bonus  # Weapon upgrade priority
+
         item_region_scores[rid] = item_region_scores.get(rid, 0) + score
 
     enemy_region_count = {}
@@ -3216,6 +3340,15 @@ def _choose_move_target(connections, danger_ids: set,
             # COMBAT HOTSPOT INTEGRATION
             combat_bonus = _calculate_combat_hotspot_bonus(conn, my_hp, has_weapon, healing_count)
             score += combat_bonus
+            
+            # LOOT DENSITY BONUS: Prioritize loot-rich areas
+            loot_bonus = 0
+            if conn in item_region_scores:
+                loot_bonus = min(item_region_scores[conn] * 0.5, 30)  # Cap bonus at 30
+                if loot_bonus > 0:
+                    log.debug("LOOT_DENSITY_BONUS: %s has loot value %d, bonus=%d", 
+                             conn[:8], item_region_scores[conn], loot_bonus)
+            score += loot_bonus
             
             # VISITED REGION PENALTY
             is_new = conn not in _visited_regions
