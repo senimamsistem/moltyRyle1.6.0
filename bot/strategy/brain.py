@@ -1072,9 +1072,30 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         return util_action
     
     # COMBAT WARNING: Skip inventory management when enemies nearby
+    # EXCEPTION: Allow critical healing pickup even during combat!
     if enemies_here or enemies_in_range:
-        log.info("🚨 COMBAT_PRIORITY: Enemies nearby (%d here, %d in range) - skipping inventory management", 
+        log.info("🚨 COMBAT_PRIORITY: Enemies nearby (%d here, %d in range) - checking critical pickups", 
                  len(enemies_here), len(enemies_in_range))
+        
+        # CRITICAL HEALING PICKUP: Allow even during combat if HP is low
+        if hp <= 25 and healing_count == 0:
+            healing_items = [item for item in items_here if item.get("typeId", "").lower() in RECOVERY_ITEMS]
+            if healing_items:
+                best_heal = healing_items[0]  # Pick first available healing
+                log.warning("🩹 COMBAT_EMERGENCY_PICKUP: HP=%d critical, picking up %s during combat!", 
+                          hp, best_heal.get("typeId", "healing"))
+                return {"action": "pickup", "data": {"itemId": best_heal["id"]},
+                        "reason": f"COMBAT EMERGENCY: HP={hp} critical - picking up {best_heal.get('typeId','healing')}"}
+        
+        # WEAPON PICKUP: Allow if unarmed and enemies nearby
+        if not equipped:
+            weapon_items = [item for item in items_here if item.get("category") == "weapon" or item.get("typeId", "").lower() in WEAPONS]
+            if weapon_items:
+                best_weapon = max(weapon_items, key=lambda x: WEAPONS.get(x.get("typeId", "").lower(), {}).get("bonus", 0))
+                log.warning("🛡️ COMBAT_WEAPON_PICKUP: Unarmed with enemies nearby, picking up %s!", 
+                          best_weapon.get("typeId", "weapon"))
+                return {"action": "pickup", "data": {"itemId": best_weapon["id"]},
+                        "reason": f"COMBAT DEFENSE: Picking up {best_weapon.get('typeId','weapon')} for protection"}
 
     # ── Priority 2: AGGRESSIVE SNIPER COMBAT (Before cooldown check!) ─────────
     # AGGRESSIVE SNIPER: Attack ANY enemy in range regardless of weapon/HP/EP
@@ -1251,6 +1272,16 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     if is_ep_crisis:
         log.warning("🚨 EP_CRISIS_MODE: EP=%d <= threshold=%d with DZ threat! STOP non-essential actions!",
                     ep, ep_crisis_threshold)
+        
+        # EXCEPTION: Allow critical healing pickup even during EP crisis
+        if hp <= 25 and healing_count == 0:
+            healing_items = [item for item in items_here if item.get("typeId", "").lower() in RECOVERY_ITEMS]
+            if healing_items:
+                best_heal = healing_items[0]
+                log.warning("🩹 EP_CRISIS_PICKUP: HP=%d critical, picking up %s despite EP crisis!", 
+                          hp, best_heal.get("typeId", "healing"))
+                return {"action": "pickup", "data": {"itemId": best_heal["id"]},
+                        "reason": f"EP CRISIS: HP={hp} critical - picking up {best_heal.get('typeId','healing')}"}
     
     # ── Priority 6: EP RECOVERY (Crisis Prevention) ───────────────
     # 🔄 PROACTIVE EP RECOVERY: Jangan tunggu sampai EP = 0!
