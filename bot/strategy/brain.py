@@ -1480,7 +1480,18 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
 
     # ── AGGRESSIVE CHASE: Only for MELEE! Ranged shoots from distance ──
     # Kalau ada musuh lemah di adjacent region
-    if finisher_targets and ep >= move_ep_cost and hp >= 30:
+    # 🚨 EP SAFETY: Don't chase if EP too low - need buffer untuk escape
+    MIN_EP_FOR_CHASE = 4  # Minimum EP untuk chase + emergency buffer
+    
+    # EP SAFETY CHECK: Warn if EP too low for chase
+    if finisher_targets and ep >= move_ep_cost and hp >= 30 and ep < MIN_EP_FOR_CHASE:
+        log.warning("🚨 EP_SAFETY: Cannot chase finishers - EP=%d < %d (need buffer untuk escape)",
+                   ep, MIN_EP_FOR_CHASE)
+        log.info("🔋 EP_RECOVERY_PRIORITY: Need EP recovery before aggressive actions")
+        # Don't chase when EP is low - prioritize EP recovery
+        pass  # Continue to next priority (rest/EP recovery)
+    
+    if finisher_targets and ep >= move_ep_cost and hp >= 30 and ep >= MIN_EP_FOR_CHASE:
         for target in finisher_targets:
             target_rid = target.get("regionId")
             if target_rid and target_rid != region_id:
