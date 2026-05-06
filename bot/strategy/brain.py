@@ -55,6 +55,10 @@ from bot.utils.performance_monitor import (
     performance_monitor, start_decision_timing, end_decision_timing,
     record_action, get_performance_report, check_performance
 )
+from bot.strategy.item_need_predictor import (
+    predict_item_needs,
+    get_pickup_recommendation, should_use_item_now
+)
 
 log = get_logger(__name__)
 
@@ -371,6 +375,33 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     region_id = region.get("id", "")
     region_terrain = region.get("terrain", "").lower() if isinstance(region, dict) else ""
     region_weather = region.get("weather", "").lower() if isinstance(region, dict) else ""
+    
+    # 📦 ITEM NEED PREDICTION: Analyze what we need based on phase and situation
+    # This guides pickup decisions and helps with inventory management
+    healing_count = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS])
+    has_binoculars = any(i.get("typeId", "").lower() == "binoculars" for i in inventory)
+    has_map = any(i.get("typeId", "").lower() == "map" for i in inventory)
+    
+    # Calculate DZ threat untuk item need prediction (simplified - just pending DZ)
+    pending_dz_ids = set(dz.get("id", dz.get("regionId", "")) for dz in pending_dz if isinstance(dz, dict))
+    is_dz_threat = region_id in pending_dz_ids or any(
+        isinstance(r, dict) and r.get("id") in pending_dz_ids for r in connections
+    )
+    
+    item_need_profile = predict_item_needs(
+        alive_count=alive_count,
+        inventory=inventory,
+        equipped_weapon=equipped,
+        current_hp=hp,
+        current_ep=ep,
+        max_ep=max_ep,
+        is_dz_threat=is_dz_threat,
+        enemies_nearby=len([a for a in visible_agents if a.get("isAlive") and a.get("id") != self_data.get("id")]),
+        has_binoculars=has_binoculars,
+        has_map=has_map
+    )
+    # Store untuk use in pickup decisions
+    decide_action._item_need_profile = item_need_profile
 
     # NEW: Detect guardians from whisper messages (they whisper from their location)
     _detect_guardians_from_whispers(messages, region_id, connected_regions, visible_regions)
@@ -1012,7 +1043,8 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             return heal_action
         
         # Auto-pickup Moltz (currency) and valuable items
-        pickup_action = _check_pickup(visible_items, inventory, region_id)
+        # 📦 Pass item need profile untuk smarter pickup decisions
+        pickup_action = _check_pickup(visible_items, inventory, region_id, item_need_profile)
         if pickup_action:
             return pickup_action
     
@@ -2119,7 +2151,7 @@ _known_agents: dict = {}
 #     return ""
 
 
-def _check_pickup(items: list, inventory: list, region_id: str) -> dict | None:
+def _check_pickup(items: list, inventory: list, region_id: str, item_need_profile=None) -> dict | None:
     """Smart pickup: weapons > healing stockpile > utility > Moltz (always).
     Max inventory = 10 per limits.md.
     Strategy:
@@ -2128,6 +2160,8 @@ def _check_pickup(items: list, inventory: list, region_id: str) -> dict | None:
     - Healing: stockpile for endgame (keep at least 2-3 healing items)
     - Binoculars: passive vision+1, always pickup
     - Map: pickup and use immediately
+    
+    📦 ITEM NEED PREDICTION: Uses item_need_profile untuk smarter decisions
     """
     # Filter items in current region (items may lack regionId field)
     local_items = [i for i in items
@@ -2144,12 +2178,51 @@ def _check_pickup(items: list, inventory: list, region_id: str) -> dict | None:
                      and i.get("typeId", "").lower() in RECOVERY_ITEMS
                      and RECOVERY_ITEMS.get(i.get("typeId", "").lower(), 0) > 0)
 
+    # 📦 ITEM NEED PREDICTION: Check predicted needs
+    if item_need_profile and item_need_profile.shopping_list:
+        # Prioritize items in our shopping list
+        for need in item_need_profile.shopping_list[:3]:  # Top 3 needs
+            need_type = need["type"]
+            priority = need["priority"]
+            
+            # Find matching item on ground
+            for item in local_items:
+                item_type = item.get("typeId", "").lower()
+                category = item.get("category", "").lower()
+                
+                # Weapon need
+                if need_type == "weapon" and category == "weapon":
+                    acceptable = need.get("acceptable_weapons", [])
+                    if not acceptable or item_type in acceptable:
+                        log.info("📦 NEED_PICKUP [%s]: %s - %s", 
+                                priority.upper(), item_type, need["reason"])
+                        return {"action": "pickup", "data": {"itemId": item["id"]},
+                                "reason": f"NEEDED {priority}: {need['reason']}"}
+                
+                # Healing need
+                elif need_type == "healing" and item_type in ["bandage", "medkit", "emergency_food"]:
+                    log.info("📦 NEED_PICKUP [%s]: %s - %s",
+                            priority.upper(), item_type, need["reason"])
+                    return {"action": "pickup", "data": {"itemId": item["id"]},
+                            "reason": f"NEEDED {priority}: {need['reason']}"}
+    
     # SMART INVENTORY: If full, check if we should use inferior items first
     if len(inventory) >= 10:
         # Try to use low-value items to make space for better ones
         usage_action = _try_use_low_value_items(inventory, heal_count)
         if usage_action:
             return usage_action
+        
+        # Check if predicted needs justify making space
+        if item_need_profile and item_need_profile.needs_weapon:
+            # We need a weapon desperately - try harder to make space
+            log.warning("📦 INVENTORY_FULL but NEED WEAPON - trying to make space")
+            # Force check for any item we can use
+            for item in inventory:
+                if should_use_item_now(item, item_need_profile, 100, 10, 10):
+                    log.info("📦 USING_ITEM_TO_MAKE_SPACE: %s", item.get("typeId", "item"))
+                    return {"action": "use_item", "data": {"itemId": item["id"]},
+                            "reason": "Making space for needed weapon"}
         
         # If no usage possible, check if new item is significantly better
         best_replacement = _find_best_replacement(local_items, inventory, heal_count)
