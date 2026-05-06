@@ -299,18 +299,9 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         game_phase = "HIGH"
         phase_strategy = "COMBAT_DOMINANCE"
     
-    log.info("🎮 PHASE_STRATEGY: %s game (%d alive) - %s strategy", 
-             game_phase, alive_count, phase_strategy)
+    # Initialize action variable
+    action = None
     
-    # ⏱️ PERFORMANCE MONITOR: Start timing decision process
-    decision_start_time = start_decision_timing()
-    
-    # Track game phase untuk latency analysis
-    latency_game_phase = game_phase.lower() if game_phase else "unknown"
-
-    self_data = view.get("self", {})
-    region = view.get("currentRegion", {})
-    hp = self_data.get("hp", 100)
     ep = self_data.get("ep", 10)
     max_ep = self_data.get("maxEp", 10)
     atk = self_data.get("atk", 10)
@@ -1938,6 +1929,13 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     end_decision_timing(decision_start_time, "wait", latency_game_phase, alive_count)
     # ⏱️ Check untuk periodic performance report
     check_performance()
+    
+    # 🔍 DEBUG: Log final action decision
+    log.warning("🚨 NO_ACTION_RETURNED - Bot will wait (this might be wrong!)")
+    log.info("🔍 DEBUG_INFO: can_act=%s, hp=%d, ep=%d, phase=%s, enemies=%d", 
+             can_act, hp, ep, game_phase if 'game_phase' in locals() else "unknown", 
+             len([a for a in visible_agents if a.get("isAlive") and a.get("id") != self_data.get("id")]) if 'visible_agents' in locals() else 0)
+    
     return None  # tunggu for next turn
 
 
