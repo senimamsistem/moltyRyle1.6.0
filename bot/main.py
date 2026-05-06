@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 
 from bot.utils.logger import get_logger
-from bot.config import DASHBOARD_PORT
+from bot.config import DASHBOARD_PORT, BOT_PORT
 from bot.dashboard.state import dashboard_state
 from bot.game.websocket_engine import WebSocketEngine
 from bot.credentials import get_api_key

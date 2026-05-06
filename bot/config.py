@@ -48,7 +48,9 @@ COOLDOWN_DURATION = 60  # seconds
 
 # ── Dashboard config ───────────────────────────────────────────────────
 # Railway injects PORT env var; fallback to DASHBOARD_PORT or 8080
-DASHBOARD_PORT = int(os.getenv("PORT", os.getenv("DASHBOARD_PORT", "8080")))
+# Use separate port for dashboard to avoid WebSocket conflicts
+BOT_PORT = int(os.getenv("PORT", "8080"))  # Bot WebSocket port
+DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8081"))  # Dashboard web port
 
 # ── Credential paths ─────────────────────────────────────────────────
 DEV_AGENT_DIR = Path("dev-agent")
