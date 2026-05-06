@@ -47,6 +47,11 @@ def create_app():
 # FastAPI app
 app = create_app()
 
+@app.get("/health")
+async def health_check():
+    """Railway health check endpoint."""
+    return {"status": "healthy", "service": "molty-royale-dashboard"}
+
 @app.get("/", response_class=HTMLResponse)
 async def index_handler():
     """Serve the dashboard HTML (no cache to always get latest)."""
@@ -55,9 +60,9 @@ async def index_handler():
         content = f.read()
     return HTMLResponse(content, headers={
         "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache"
+        "Pragma": "no-cache",
+        "Expires": "0"
     })
-
 
 @app.get("/api/state")
 async def api_state():
