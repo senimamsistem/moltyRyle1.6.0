@@ -4,7 +4,7 @@ Predicts item needs based on game phase, current loadout, and threats
 Integrates with Strategy DNA for learning and auto-tuning item priorities
 """
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from enum import Enum
