@@ -20,9 +20,6 @@ from bot.heartbeat import Heartbeat
 
 log = get_logger(__name__)
 
-# Global variable for port override
-_current_port = DASHBOARD_PORT
-
 
 async def start_dashboard():
     """Start main dashboard server with evolution monitoring"""
@@ -32,28 +29,16 @@ async def start_dashboard():
         log.warning("⚠️ uvicorn not available - dashboard disabled")
         return
     
-    # Railway debugging - ensure we have the right port
-    import os
-    railway_port = os.getenv("PORT")
-    if railway_port:
-        log.info("🚂 Railway detected: Using PORT=%s", railway_port)
-        # Override port for Railway
-        global _current_port
-        _current_port = int(railway_port)
+    log.info("🌐 Starting Dashboard on port %s", DASHBOARD_PORT)
     
-    log.info("🌐 Starting Dashboard on port %s", _current_port)
-    
-    # Configure uvicorn for Railway with memory optimization
+    # Configure uvicorn for Railway with 0.0.0.0 IP and reduced log noise
     config = uvicorn.Config(
         dashboard_state.app,
         host="0.0.0.0",
-        port=_current_port,
-        log_level="warning",      # Reduce log noise
-        access_log=False,          # Disable access logs
-        use_colors=False,          # Disable colors for cleaner output
-        limit_concurrency=10,      # Limit concurrent connections for memory
-        limit_max_requests=1000,    # Restart after 1000 requests to free memory
-        timeout_keep_alive=5        # Shorter keep-alive for memory
+        port=DASHBOARD_PORT,
+        log_level="warning",  # Reduce log noise
+        access_log=False,      # Disable access logs
+        use_colors=False       # Disable colors for cleaner output
     )
     
     server = uvicorn.Server(config)
@@ -64,11 +49,6 @@ async def main():
     log.info("Molty Royale AI Agent v1.6.0")
     log.info("By Eryck Juliant")
     log.info("🤖 Autonomous AI System: Initializing...")
-    
-    # Railway debugging - check environment
-    import os
-    railway_port = os.getenv("PORT", "not set")
-    log.info("🚂 Railway Environment: PORT=%s, DASHBOARD_PORT=%s, _current_port=%s", railway_port, DASHBOARD_PORT, _current_port)
     
     # Initialize autonomous AI system
     await autonomous_manager.initialize_autonomous_system()

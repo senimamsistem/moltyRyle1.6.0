@@ -11,8 +11,8 @@ from bot.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-# Maximum log entries kept in memory (reduced for Railway memory constraints)
-MAX_LOGS = 200
+# Maximum log entries kept in memory
+MAX_LOGS = 500
 
 
 class DashboardState:
@@ -238,19 +238,14 @@ class DashboardState:
                 "next_turn_in": int(remaining) if remaining > 0 else 0,
             },
             "accounts": self.accounts,
-            "logs": list(self.global_logs)[-50:],  # Reduced for memory
-            "agent_logs": {k: list(v)[-25:] for k, v in self.agent_logs.items()},  # Reduced for memory
+            "logs": list(self.global_logs)[-200:],
+            "agent_logs": {k: list(v)[-100:] for k, v in self.agent_logs.items()},
         }
 
 
 # Global singleton
 dashboard_state = DashboardState()
 
-# Add app property for compatibility with main.py - lazy load to avoid circular import
-def _get_app(self):
-    """Lazy load app to avoid circular import."""
-    from bot.dashboard.server import app
-    return app
-
-# Add app property as lazy getter
-DashboardState.app = property(_get_app)
+# Add app property for compatibility with main.py
+from bot.dashboard.server import app
+dashboard_state.app = app

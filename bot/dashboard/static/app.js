@@ -51,206 +51,8 @@ function showPage(p) {
   currentPage = p;
 }
 
-// ─── Enhanced Log Management ───
-let logBuffer = [];
-let logStats = { info: 0, warning: 0, error: 0, total: 0 };
-let isPaused = false;
-let currentFilter = 'all';
-let searchTerm = '';
-
-// Log level icons and colors
-const logConfig = {
-  info: { icon: 'ℹ️', color: 'var(--cyan)' },
-  warning: { icon: '⚠️', color: 'var(--amber)' },
-  error: { icon: '❌', color: 'var(--red)' },
-  debug: { icon: '🔍', color: 'var(--text2)' }
-};
-
-function addLogEntry(entry) {
-  if (isPaused) return;
-  
-  // Parse log entry
-  const logEntry = parseLogEntry(entry);
-  logBuffer.push(logEntry);
-  
-  // Update stats
-  updateLogStats(logEntry);
-  
-  // Filter and render
-  renderLogs();
-  
-  // Auto-scroll if enabled
-  if (document.getElementById('auto-scroll').checked) {
-    scrollToBottom();
-  }
-}
-
-function parseLogEntry(entry) {
-  // Parse terminal log format: [14:30:15] info    bot.strategy.brain | message
-  const match = entry.msg.match(/^\[([^\]]+)\]\s+(\w+)\s+([^\|]+)\s*\|\s*(.*)$/);
-  
-  if (match) {
-    const [, time, level, source, message] = match;
-    return {
-      time,
-      level: level.toLowerCase(),
-      source: source.trim(),
-      message: message.trim(),
-      raw: entry.msg
-    };
-  }
-  
-  // Fallback for non-standard format
-  return {
-    time: new Date().toLocaleTimeString('en-US', { hour12: false }),
-    level: 'info',
-    source: 'unknown',
-    message: entry.msg,
-    raw: entry.msg
-  };
-}
-
-function updateLogStats(entry) {
-  logStats.total++;
-  if (logStats[entry.level] !== undefined) {
-    logStats[entry.level]++;
-  }
-  
-  // Update UI
-  document.querySelector('.log-count').textContent = `(${logStats.total})`;
-  document.getElementById('log-info-count').textContent = `${logStats.info} info`;
-  document.getElementById('log-warning-count').textContent = `${logStats.warning} warnings`;
-  document.getElementById('log-error-count').textContent = `${logStats.error} errors`;
-}
-
-function renderLogs() {
-  const logBox = document.getElementById('log-box');
-  const filteredLogs = filterLogEntries();
-  
-  // Clear and render
-  logBox.innerHTML = '';
-  
-  filteredLogs.forEach((log, index) => {
-    const logElement = createLogElement(log, index === filteredLogs.length - 1);
-    logBox.appendChild(logElement);
-  });
-  
-  // Highlight search matches
-  if (searchTerm) {
-    highlightSearchMatches();
-  }
-}
-
-function filterLogEntries() {
-  return logBuffer.filter(log => {
-    // Source filter
-    if (currentFilter !== 'all') {
-      if (!log.source.toLowerCase().includes(currentFilter)) {
-        return false;
-      }
-    }
-    
-    // Search filter
-    if (searchTerm) {
-      const searchLower = searchTerm.toLowerCase();
-      return log.raw.toLowerCase().includes(searchLower);
-    }
-    
-    return true;
-  }).slice(-500); // Keep last 500 logs for performance
-}
-
-function createLogElement(log, isNew = false) {
-  const div = document.createElement('div');
-  div.className = `log-entry ${isNew ? 'log-new' : ''}`;
-  
-  const config = logConfig[log.level] || logConfig.info;
-  
-  div.innerHTML = `
-    <span class="log-icon">${config.icon}</span>
-    <span class="log-time">${log.time}</span>
-    <span class="log-level ${log.level}">${log.level.toUpperCase()}</span>
-    <span class="log-source">${log.source}</span>
-    <span class="log-message">${log.message}</span>
-  `;
-  
-  return div;
-}
-
-function highlightSearchMatches() {
-  const logBox = document.getElementById('log-box');
-  const logEntries = logBox.querySelectorAll('.log-entry');
-  
-  logEntries.forEach(entry => {
-    const message = entry.querySelector('.log-message');
-    if (message && searchTerm) {
-      const regex = new RegExp(`(${searchTerm})`, 'gi');
-      message.innerHTML = message.textContent.replace(regex, '<mark>$1</mark>');
-    }
-  });
-}
-
-// Log control functions
-function filterLogs(filter, button) {
-  currentFilter = filter;
-  
-  // Update button states
-  document.querySelectorAll('.log-filter-group .log-btn').forEach(btn => {
-    btn.classList.remove('active');
-  });
-  button.classList.add('active');
-  
-  renderLogs();
-}
-
-function pauseLogs() {
-  isPaused = !isPaused;
-  const pauseBtn = document.getElementById('pause-btn');
-  pauseBtn.textContent = isPaused ? '▶️ Resume' : '⏸️ Pause';
-  pauseBtn.classList.toggle('active', isPaused);
-}
-
-function clearLogs() {
-  logBuffer = [];
-  logStats = { info: 0, warning: 0, error: 0, total: 0 };
-  renderLogs();
-  updateLogStats({ level: 'info' });
-}
-
-function exportLogs() {
-  const logs = logBuffer.map(log => log.raw).join('\n');
-  const blob = new Blob([logs], { type: 'text/plain' });
-  const url = URL.createObjectURL(blob);
-  
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `molty-logs-${new Date().toISOString().slice(0, 19)}.txt`;
-  a.click();
-  
-  URL.revokeObjectURL(url);
-}
-
-function scrollToBottom() {
-  const logBox = document.getElementById('log-box');
-  logBox.scrollTop = logBox.scrollHeight;
-}
-
-// Search functionality
-document.addEventListener('DOMContentLoaded', function() {
-  const searchInput = document.getElementById('log-search');
-  if (searchInput) {
-    searchInput.addEventListener('input', function(e) {
-      searchTerm = e.target.value;
-      renderLogs();
-    });
-  }
-});
-
-// ─── WebSocket & State Updates ───
-let ws = null;
-let reconnectTimer = null;
-let state = {};
-let wsRetry = 0;
+// ─── WebSocket with fast reconnect ───
+let ws, wsRetry = 0;
 function connectWS() {
   const url = (location.protocol==='https:'?'wss:':'ws:') + '//' + location.host + '/ws';
   try { ws = new WebSocket(url); } catch(e) { setTimeout(connectWS, 2000); return; }
@@ -557,26 +359,17 @@ function renderLearning() {
 
   $('learning-recs').innerHTML = recs.length
     ? recs.map(r => `<div class="rec-line">${esc(r)}</div>`).join('')
-    : '<div class="evolution-event">⚠️ No recommendations yet</div>';
+    : '<div class="rec-line">Belum ada rekomendasi.</div>';
 }
 
-// ─── Enhanced Logs Integration ───
+// ─── Logs (always render — no skip) ───
 function renderLogs() {
-  const logs = S.global_logs || [];
+  const logs = currentLogTab === 'all' ? (S.logs||[]) : ((S.agent_logs||{})[currentLogTab]||[]);
   const box = $('log-box');
   if (!box) return;
-  
-  // Process new logs from dashboard state
-  logs.forEach(entry => {
-    // Check if this log is already in our buffer
-    const exists = logBuffer.some(log => log.raw === entry.msg);
-    if (!exists) {
-      addLogEntry(entry);
-    }
-  });
 
   const wasBottom = box.scrollTop >= box.scrollHeight - box.clientHeight - 40;
-  const visible = logBuffer.slice(-200);
+  const visible = logs.slice(-200);
   box.innerHTML = visible.map(l =>
     `<div class="log-line">${_logLine(l)}</div>`
   ).join('');
