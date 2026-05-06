@@ -363,6 +363,9 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     messages = view.get("recentMessages", [])
     alive_count = view.get("aliveCount", 100)
 
+    # Extract current region from view
+    region = view.get("currentRegion", {})
+    
     # Fallback connections from currentRegion if connectedRegions empty
     connections = connected_regions or region.get("connections", [])
     interactables = region.get("interactables", [])
