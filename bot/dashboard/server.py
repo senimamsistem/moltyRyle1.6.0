@@ -35,8 +35,11 @@ def create_app():
     # Add all routes
     app.include_router(app)
     
-    # Start push loop
-    asyncio.create_task(_push_loop(app))
+    # Add startup event to start push loop safely
+    @app.on_event("startup")
+    async def startup_event():
+        """Start background tasks after app is fully initialized."""
+        asyncio.create_task(_push_loop(app))
     
     return app
 

@@ -246,6 +246,11 @@ class DashboardState:
 # Global singleton
 dashboard_state = DashboardState()
 
-# Add app property for compatibility with main.py
-from bot.dashboard.server import app
-dashboard_state.app = app
+# Add app property for compatibility with main.py - lazy load to avoid circular import
+def _get_app(self):
+    """Lazy load app to avoid circular import."""
+    from bot.dashboard.server import app
+    return app
+
+# Add app property as lazy getter
+DashboardState.app = property(_get_app)
