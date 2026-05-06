@@ -46,6 +46,11 @@ async def api_export(request):
     })
 
 
+async def api_evolution(request):
+    """Return evolution data for dashboard."""
+    return web.json_response(dashboard_state.get_evolution_data())
+
+
 def _load_json_file(path: str, fallback):
     """Load JSON data for dashboard widgets."""
     try:
@@ -363,6 +368,7 @@ def create_app() -> web.Application:
     app.router.add_get("/api/accounts", api_accounts)
     app.router.add_post("/api/accounts", api_accounts_post)
     app.router.add_get("/api/learning", api_learning)
+    app.router.add_get("/api/evolution", api_evolution)
     app.router.add_get("/api/export", api_export)
     app.router.add_post("/api/import", api_import)
     app.router.add_get("/api/health", api_health)

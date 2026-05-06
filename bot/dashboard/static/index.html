@@ -29,6 +29,10 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20"/><path d="M5 7c0-2 2-4 4-4 1.5 0 3 1 3 3 0-2 1.5-3 3-3 2 0 4 2 4 4 0 2-1 3-2.5 4C18 12 19 13 19 15.5c0 2.5-2 4.5-4.5 4.5-1.5 0-2.5-.7-3-1.8-.5 1.1-1.5 1.8-3 1.8C6 20 4 18 4 15.5 4 13 5 12 6.5 11 5 10 5 9 5 7z"/></svg>
     <span class="nav-text">Learning</span>
   </div>
+  <div class="nav-item" data-page="evolution" onclick="showPage('evolution')">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/><circle cx="12" cy="12" r="3"/></svg>
+    <span class="nav-text">Evolution</span>
+  </div>
   <div class="nav-item" data-page="export" onclick="showPage('export')">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
     <span class="nav-text">Export</span>
@@ -147,6 +151,64 @@
         <div class="maint-badge" style="border-color:var(--amber);color:var(--amber)">COMING SOON</div>
         <p class="maint-desc">Real-time analytics dashboard with game history, win/loss charts, earnings tracking, and performance insights across all agents.</p>
         <div class="maint-eta"><span class="maint-dot" style="background:var(--amber)"></span> In Development</div>
+      </div>
+    </div>
+
+    <!-- Evolution Page -->
+    <div class="page" id="page-evolution">
+      <div class="card">
+        <h2>🧬 Bot Evolution Status</h2>
+        <div class="status-grid">
+          <div class="status-item">
+            <div class="status-value" id="evolution-generation">-</div>
+            <div>Generation</div>
+          </div>
+          <div class="status-item">
+            <div class="status-value" id="evolution-matches">-</div>
+            <div>Matches</div>
+          </div>
+          <div class="status-item">
+            <div class="status-value" id="evolution-fitness">-</div>
+            <div>Last Fitness</div>
+          </div>
+          <div class="status-item">
+            <div class="status-value" id="evolution-last-evolution">-</div>
+            <div>Last Evolution</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>🚨 Evolution Events</h2>
+        <div id="evolution-events" class="evolution-events">Loading...</div>
+      </div>
+
+      <div class="card">
+        <h2>🧬 DNA Parameter Evolution</h2>
+        <table class="tbl" id="dna-table">
+          <thead>
+            <tr>
+              <th>Parameter</th>
+              <th>Default</th>
+              <th>Current</th>
+              <th>Change</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="dna-tbody">
+            <tr><td colspan="5">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>📈 Learning Progress</h2>
+        <div id="learning-progress">Loading...</div>
+      </div>
+
+      <div class="card">
+        <h2>🧠 Agent Memory</h2>
+        <div id="memory-status">Loading...</div>
       </div>
     </div>
 

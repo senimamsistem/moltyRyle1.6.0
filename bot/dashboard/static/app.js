@@ -424,6 +424,129 @@ function importData(e) {
   r.readAsText(f);
 }
 
+// ─── Evolution Functions ───
+function loadEvolutionData() {
+  fetch('/api/evolution')
+    .then(r => r.json())
+    .then(data => {
+      updateEvolutionStatus(data);
+      updateEvolutionEvents(data);
+      updateDNAComparison(data);
+      updateLearningProgress(data);
+      updateMemoryStatus(data);
+    })
+    .catch(err => console.error('Error loading evolution data:', err));
+}
+
+function updateEvolutionStatus(data) {
+  $('evolution-generation').textContent = data.generation || '0';
+  $('evolution-matches').textContent = data.match_count || '0';
+  $('evolution-fitness').textContent = data.last_fitness ? data.last_fitness.toFixed(1) : '-';
+  $('evolution-last-evolution').textContent = data.last_evolution || 'Never';
+}
+
+function updateEvolutionEvents(data) {
+  const eventsDiv = $('evolution-events');
+  if (data.evolution_events && data.evolution_events.length > 0) {
+    eventsDiv.innerHTML = data.evolution_events.map(event => 
+      `<div class="evolution-event">🔔 ${event}</div>`
+    ).join('');
+  } else {
+    eventsDiv.innerHTML = '<div class="evolution-event">⚠️ No evolution events yet. Play more matches!</div>';
+  }
+}
+
+function updateDNAComparison(data) {
+  const tbody = $('dna-tbody');
+  if (data.dna_comparison) {
+    tbody.innerHTML = data.dna_comparison.map(param => {
+      const changeClass = param.significant_change ? 'change-positive' : '';
+      const status = param.significant_change ? '🔥 Evolved' : 'Stable';
+      return `
+        <tr>
+          <td>${param.parameter}</td>
+          <td>${param.default}</td>
+          <td>${param.current}</td>
+          <td class="${changeClass}">${param.change}</td>
+          <td>${status}</td>
+        </tr>
+      `;
+    }).join('');
+  } else {
+    tbody.innerHTML = '<tr><td colspan="5">No DNA data available</td></tr>';
+  }
+}
+
+function updateLearningProgress(data) {
+  const progressDiv = $('learning-progress');
+  if (data.learning_progress) {
+    const progress = data.learning_progress;
+    let html = `
+      <div class="status-grid">
+        <div class="status-item">
+          <div class="status-value">${progress.total_matches}</div>
+          <div>Total Matches</div>
+        </div>
+        <div class="status-item">
+          <div class="status-value ${progress.fitness_trend > 0 ? 'positive' : progress.fitness_trend < 0 ? 'negative' : ''}">${progress.fitness_trend > 0 ? '+' : ''}${progress.fitness_trend.toFixed(1)}</div>
+          <div>Fitness Trend</div>
+        </div>
+        <div class="status-item">
+          <div class="status-value">${progress.avg_placement.toFixed(1)}</div>
+          <div>Avg Placement</div>
+        </div>
+      </div>
+    `;
+    
+    if (progress.recent_matches && progress.recent_matches.length > 0) {
+      html += '<h3>Recent Matches (Last 10)</h3>';
+      html += '<table class="tbl"><thead><tr><th>Match</th><th>Placement</th><th>Kills</th><th>Fitness</th></tr></thead><tbody>';
+      html += progress.recent_matches.map(match => 
+        `<tr>
+          <td>#${match.match}</td>
+          <td>${match.placement}</td>
+          <td>${match.kills}</td>
+          <td>${match.fitness.toFixed(1)}</td>
+        </tr>`
+      ).join('');
+      html += '</tbody></table>';
+    }
+    
+    progressDiv.innerHTML = html;
+  } else {
+    progressDiv.innerHTML = '<div class="evolution-event">⚠️ No learning progress data yet</div>';
+  }
+}
+
+function updateMemoryStatus(data) {
+  const memoryDiv = $('memory-status');
+  if (data.memory_status) {
+    const memory = data.memory_status;
+    memoryDiv.innerHTML = `
+      <div class="status-grid">
+        <div class="status-item">
+          <div class="status-value">${memory.total_games}</div>
+          <div>Total Games</div>
+        </div>
+        <div class="status-item">
+          <div class="status-value">${memory.wins}</div>
+          <div>Wins</div>
+        </div>
+        <div class="status-item">
+          <div class="status-value">${memory.avg_kills.toFixed(1)}</div>
+          <div>Avg Kills</div>
+        </div>
+        <div class="status-item">
+          <div class="status-value">${memory.lessons}</div>
+          <div>Lessons</div>
+        </div>
+      </div>
+    `;
+  } else {
+    memoryDiv.innerHTML = '<div class="evolution-event">⚠️ No memory data available</div>';
+  }
+}
+
 // ─── Boot ───
 // Ensure DOM is ready, then fetch state + connect WS
 document.addEventListener('DOMContentLoaded', () => {
@@ -437,6 +560,10 @@ document.addEventListener('DOMContentLoaded', () => {
   connectWS();
   refreshLearning();
   setInterval(refreshLearning, 10000);
+  
+  // 3. Load evolution data and auto-refresh
+  loadEvolutionData();
+  setInterval(loadEvolutionData, 30000); // Refresh every 30 seconds
 
   // 3. Safety: force render after 2s in case of race condition
   setTimeout(() => { render(); }, 2000);

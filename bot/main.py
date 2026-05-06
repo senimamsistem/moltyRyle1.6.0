@@ -10,31 +10,30 @@ import os
 from pathlib import Path
 
 from bot.utils.logger import get_logger
-from bot.config import DASHBOARD_PORT, BOT_PORT
+from bot.config import DASHBOARD_PORT
 from bot.dashboard.state import dashboard_state
 from bot.game.websocket_engine import WebSocketEngine
 from bot.credentials import get_api_key
 from bot.memory.agent_memory import AgentMemory
-from bot.dashboard.evolution_web import app as evolution_app
 from bot.autonomous_integration import autonomous_manager
 from bot.heartbeat import Heartbeat
 
 log = get_logger(__name__)
 
 
-async def start_evolution_dashboard():
-    """Start evolution dashboard server"""
+async def start_dashboard():
+    """Start main dashboard server with evolution monitoring"""
     try:
         import uvicorn
     except ImportError:
         log.warning("⚠️ uvicorn not available - dashboard disabled")
         return
     
-    log.info("🌐 Starting Evolution Dashboard on port %s", DASHBOARD_PORT)
+    log.info("🌐 Starting Dashboard on port %s", DASHBOARD_PORT)
     
-    # Configure uvicorn for Railway
+    # Configure uvicorn for Railway with 0.0.0.0 IP
     config = uvicorn.Config(
-        evolution_app,
+        dashboard_state.app,
         host="0.0.0.0",
         port=DASHBOARD_PORT,
         log_level="info"
@@ -57,8 +56,8 @@ async def main():
     heartbeat = Heartbeat()
 
     async def run_all():
-        # Start evolution dashboard server (non-blocking)
-        dashboard_task = asyncio.create_task(start_evolution_dashboard())
+        # Start dashboard server (non-blocking)
+        dashboard_task = asyncio.create_task(start_dashboard())
         
         # Give dashboard a moment to start
         await asyncio.sleep(1)
