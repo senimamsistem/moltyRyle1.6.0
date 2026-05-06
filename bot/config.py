@@ -46,6 +46,10 @@ REST_RATE_LIMIT = 300   # calls/min per IP
 WS_RATE_LIMIT = 120     # messages/min per connection
 COOLDOWN_DURATION = 60  # seconds
 
+# ── Dashboard config ───────────────────────────────────────────────────
+# Railway injects PORT env var; fallback to DASHBOARD_PORT or 8080
+DASHBOARD_PORT = int(os.getenv("PORT", os.getenv("DASHBOARD_PORT", "8080")))
+
 # ── Credential paths ─────────────────────────────────────────────────
 DEV_AGENT_DIR = Path("dev-agent")
 CREDENTIALS_FILE = DEV_AGENT_DIR / "credentials.json"

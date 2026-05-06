@@ -10,7 +10,6 @@ from typing import Dict, List, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-import uvicorn
 
 # Add bot to path
 sys.path.insert(0, '.')

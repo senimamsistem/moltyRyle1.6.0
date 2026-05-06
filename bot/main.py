@@ -21,13 +21,14 @@ from bot.heartbeat import Heartbeat
 
 log = get_logger(__name__)
 
-# Railway injects PORT env var; fallback to DASHBOARD_PORT or 8080
-DASHBOARD_PORT = int(os.getenv("PORT", os.getenv("DASHBOARD_PORT", "8080")))
-
 
 async def start_evolution_dashboard():
     """Start evolution dashboard server"""
-    import uvicorn
+    try:
+        import uvicorn
+    except ImportError:
+        log.warning("⚠️ uvicorn not available - dashboard disabled")
+        return
     
     log.info("🌐 Starting Evolution Dashboard on port %s", DASHBOARD_PORT)
     
