@@ -302,6 +302,8 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # Initialize action variable
     action = None
     
+    # Extract player stats
+    hp = self_data.get("hp", 100)
     ep = self_data.get("ep", 10)
     max_ep = self_data.get("maxEp", 10)
     atk = self_data.get("atk", 10)
