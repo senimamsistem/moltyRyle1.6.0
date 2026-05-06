@@ -59,6 +59,9 @@ from bot.strategy.item_need_predictor import (
     predict_item_needs,
     get_pickup_recommendation, should_use_item_now
 )
+from bot.strategy.inventory_decision_tree import (
+    evaluate_pickup, get_space_creation_plan, analyze_endgame_readiness
+)
 
 log = get_logger(__name__)
 
@@ -402,6 +405,23 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     )
     # Store untuk use in pickup decisions
     decide_action._item_need_profile = item_need_profile
+    
+    # 📦 DECISION TREE: Check endgame readiness untuk late game (<20 alive)
+    if alive_count <= 20:
+        endgame_readiness = analyze_endgame_readiness(inventory, equipped)
+        if endgame_readiness["readiness_score"] < 70:
+            log.warning("📦 ENDGAME_PREP: Score %d/100 - Issues: %s",
+                      endgame_readiness["readiness_score"],
+                      "; ".join(endgame_readiness["issues"]) if endgame_readiness["issues"] else "None")
+            if not endgame_readiness["can_acquire_t3"]:
+                log.warning("📦 INVENTORY_LOCKED: Cannot acquire T3 weapon - %d free slots, %d flexible",
+                          endgame_readiness["free_slots"], endgame_readiness["can_free_slots"])
+        else:
+            log.info("📦 ENDGAME_READY: Score %d/100 | T3:%s | Heals:%d | CanAcquire:%s",
+                   endgame_readiness["readiness_score"],
+                   "Y" if endgame_readiness["has_t3_weapon"] else "N",
+                   endgame_readiness["heal_count"],
+                   "Y" if endgame_readiness["can_acquire_t3"] else "N")
 
     # NEW: Detect guardians from whisper messages (they whisper from their location)
     _detect_guardians_from_whispers(messages, region_id, connected_regions, visible_regions)
@@ -2208,34 +2228,82 @@ def _check_pickup(items: list, inventory: list, region_id: str, item_need_profil
     
     # SMART INVENTORY: If full, check if we should use inferior items first
     if len(inventory) >= 10:
-        # Try to use low-value items to make space for better ones
+        # 📦 DECISION TREE: Use advanced analysis untuk inventory full scenarios
+        # This is CRITICAL since game has no drop action - every pickup is permanent
+        best_item = None
+        best_score = -1
+        best_impact = None
+        
+        for ground_item in local_items:
+            impact = evaluate_pickup(
+                ground_item, inventory, item_need_profile,
+                100, 10, 10,  # Default HP/EP - actual values passed below
+                None  # Will get equipped weapon from context
+            )
+            
+            if impact.should_pickup and impact.item_value > best_score:
+                best_score = impact.item_value
+                best_item = ground_item
+                best_impact = impact
+        
+        # If we found a good pickup candidate
+        if best_item and best_impact:
+            # Check if we need to execute pre-pickup actions (space creation)
+            if best_impact.pre_pickup_actions:
+                log.warning("📦 INVENTORY_DECISION_TREE: Need %d pre-pickup actions untuk %s",
+                          len(best_impact.pre_pickup_actions), best_item.get("typeId", "item"))
+                
+                # Execute first pre-pickup action (use/waste item untuk space)
+                first_action = best_impact.pre_pickup_actions[0]
+                if first_action["action"] in ["use_item", "use_waste"]:
+                    log.info("📦 CREATING_SPACE: %s %s (opportunity cost: %s)",
+                            first_action["action"].upper(),
+                            first_action["item_type"],
+                            first_action["reason"])
+                    return {"action": "use_item", "data": {"itemId": first_action["item_id"]},
+                            "reason": f"Creating space untuk {best_item.get('typeId', 'item')}: {first_action['reason']}"}
+            
+            # Check risk level
+            if best_impact.future_risk in ["low", "medium"]:
+                log.info("📦 DECISION_TREE_PICKUP [%s]: %s (value=%d, risk=%s, endgame_ready=%s)",
+                        best_impact.future_risk.upper(),
+                        best_item.get("typeId", "item"),
+                        best_impact.item_value,
+                        best_impact.future_risk,
+                        "YES" if best_impact.can_get_tier3_weapon else "NO")
+                return {"action": "pickup", "data": {"itemId": best_item["id"]},
+                        "reason": f"DT_PICKUP [{best_impact.future_risk}]: {best_item.get('typeId', 'item')} | "
+                                   f"Endgame: {'YES' if best_impact.can_get_tier3_weapon else 'NO'} | "
+                                   f"Value: {best_impact.item_value}"}
+            elif best_impact.future_risk == "high" and item_need_profile and item_need_profile.needs_weapon:
+                # High risk but CRITICAL need - do it anyway
+                log.warning("📦 DECISION_TREE_PICKUP [HIGH_RISK_CRITICAL]: %s (NEED WEAPON)",
+                          best_item.get("typeId", "item"))
+                return {"action": "pickup", "data": {"itemId": best_item["id"]},
+                        "reason": f"DT_PICKUP [HIGH_RISK_CRITICAL]: Need weapon - {best_item.get('typeId', 'item')}"}
+            else:
+                log.info("📦 DECISION_TREE_SKIP: %s too risky (risk=%s, can_get_T3=%s)",
+                        best_item.get("typeId", "item"),
+                        best_impact.future_risk,
+                        "YES" if best_impact.can_get_tier3_weapon else "NO")
+        
+        # Fallback: Try simple low-value item usage
         usage_action = _try_use_low_value_items(inventory, heal_count)
         if usage_action:
             return usage_action
         
-        # Check if predicted needs justify making space
+        # Fallback: Check if predicted needs justify making space
         if item_need_profile and item_need_profile.needs_weapon:
-            # We need a weapon desperately - try harder to make space
-            log.warning("📦 INVENTORY_FULL but NEED WEAPON - trying to make space")
-            # Force check for any item we can use
+            log.warning("📦 INVENTORY_FULL but NEED WEAPON - trying to make space (fallback)")
             for item in inventory:
                 if should_use_item_now(item, item_need_profile, 100, 10, 10):
                     log.info("📦 USING_ITEM_TO_MAKE_SPACE: %s", item.get("typeId", "item"))
                     return {"action": "use_item", "data": {"itemId": item["id"]},
                             "reason": "Making space for needed weapon"}
         
-        # If no usage possible, check if new item is significantly better
-        best_replacement = _find_best_replacement(local_items, inventory, heal_count)
-        if best_replacement:
-            item_to_drop, item_to_pickup = best_replacement
-            log.info("SMART_INVENTORY: Found better item %s > %s, but no drop action available", 
-                    item_to_pickup.get("typeId", "item"), item_to_drop.get("typeId", "item"))
-            # Since game doesn't have drop action, we'll skip pickup and wait for natural turnover
-            log.info("📦 PICKUP: Inventory full (%d/10) — waiting for natural turnover", len(inventory))
-            return None
-        else:
-            log.info("📦 PICKUP: Inventory full (%d/10) — no valuable replacements", len(inventory))
-            return None
+        # No viable pickup found
+        log.info("📦 PICKUP: Inventory full (%d/10) — no suitable pickups after DT analysis", len(inventory))
+        return None
 
     # Sort by priority — Moltz always first
     local_items.sort(
