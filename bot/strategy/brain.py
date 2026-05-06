@@ -1331,7 +1331,42 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     
     # 🆕 COOLDOWN_WAIT STUCK AT EP=10: Bot punya EP max tapi masih stuck
     # Bot mungkin stuck karena canAct=False atau cooldown issue
+    # 🚨 PRIORITY: If no weapon, search for weapon instead of rest!
     if ep == 10 and not enemies_here and not enemies_in_range:
+        # Check if bot has no weapon - prioritize weapon search
+        if not equipped or equipped.get("typeId", "").lower() == "fist":
+            log.warning("🔍 EP10_WEAPON_SEARCH: EP=%d max but NO WEAPON - forcing weapon search instead of rest!", ep)
+            
+            # Force movement to find weapon
+            if connections:
+                # Look for regions with potential weapons
+                best_weapon_region = None
+                best_score = -1
+                
+                for conn in connections:
+                    rid = _get_region_id(conn)
+                    if not rid or rid in danger_ids:
+                        continue
+                    
+                    # Score based on unvisited regions (higher chance for loot)
+                    score = 50
+                    if rid not in _visited_regions:
+                        score += 30  # Bonus for unvisited regions
+                    
+                    # Avoid dangerous regions
+                    if rid in danger_ids:
+                        score -= 100
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_weapon_region = rid
+                
+                if best_weapon_region:
+                    log.info("🔍 EP10_WEAPON_MOVE: Moving to %s to find weapon (EP=%d)", best_weapon_region[:8], ep)
+                    return {"action": "move", "data": {"regionId": best_weapon_region},
+                            "reason": f"EP10_WEAPON_SEARCH: No weapon, moving to find weapon (EP={ep})"}
+        
+        # If has weapon or no connections, then use energy drink or rest
         log.warning("🔄 COOLDOWN_WAIT_EP10: EP=%d max but bot still stuck - forcing rest to break loop!", ep)
         
         # Check energy drink first (waste if EP max, but breaks loop)
