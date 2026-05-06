@@ -327,6 +327,17 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         elif entry.get("id"):
             entry["regionId"] = entry.get("regionId", "")  # Ensure regionId exists
             visible_items.append(entry)  # Legacy flat format
+    # Extract current region from view - MUST be before using it!
+    region = view.get("currentRegion", {})
+    
+    # View-level fields per api-summary.md
+    visible_regions = view.get("visibleRegions", [])
+    connected_regions = view.get("connectedRegions", [])
+    pending_dz = view.get("pendingDeathzones", [])
+    recent_logs = view.get("recentLogs", [])
+    messages = view.get("recentMessages", [])
+    alive_count = view.get("aliveCount", 100)
+
     # Map enemies to regions for movement scoring
     enemy_region_count = {}
     for a in visible_agents:
@@ -356,15 +367,6 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
              hp, ep, inv_heals, inv_wpns, inv_maps, _format_weapon_with_icon(equipped.get("typeId", "fist") if isinstance(equipped, dict) else "fist"))
     if inv_maps > 0:
         log.info("🗺️ [MAP_TRACKING] Inventory contains %d Map(s) - should use immediately if not used yet", inv_maps)
-    visible_regions = view.get("visibleRegions", [])
-    connected_regions = view.get("connectedRegions", [])
-    pending_dz = view.get("pendingDeathzones", [])
-    recent_logs = view.get("recentLogs", [])
-    messages = view.get("recentMessages", [])
-    alive_count = view.get("aliveCount", 100)
-
-    # Extract current region from view
-    region = view.get("currentRegion", {})
     
     # Fallback connections from currentRegion if connectedRegions empty
     connections = connected_regions or region.get("connections", [])
