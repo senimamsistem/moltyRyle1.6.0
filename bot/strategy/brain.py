@@ -39,6 +39,22 @@ from bot.strategy.combat_predictor import (
     should_engange_with_prediction
 )
 from bot.learning.enemy_profiler import enemy_profiler, get_enemy_intelligence
+from bot.learning.movement_predictor import (
+    movement_predictor, record_enemy_sighting, record_enemy_movement,
+    get_movement_prediction, get_escape_recommendations
+)
+from bot.strategy.terrain_master import (
+    terrain_master, get_terrain_advantage,
+    recommend_terrain_for_weapon, should_change_terrain
+)
+from bot.strategy.dz_predictor import (
+    dz_predictor, record_dz_state, get_region_safety,
+    get_dz_warning, recommend_safe_position, get_center_recommendation
+)
+from bot.utils.performance_monitor import (
+    performance_monitor, start_decision_timing, end_decision_timing,
+    record_action, get_performance_report, check_performance
+)
 
 log = get_logger(__name__)
 
@@ -278,6 +294,12 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     
     log.info("🎮 PHASE_STRATEGY: %s game (%d alive) - %s strategy", 
              game_phase, alive_count, phase_strategy)
+    
+    # ⏱️ PERFORMANCE MONITOR: Start timing decision process
+    decision_start_time = start_decision_timing()
+    
+    # Track game phase untuk latency analysis
+    latency_game_phase = game_phase.lower() if game_phase else "unknown"
 
     self_data = view.get("self", {})
     region = view.get("currentRegion", {})
@@ -419,6 +441,26 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     log.info("🔍 ENEMY_SCAN: total_visible=%d | here=%d | in_range=%d | finishers=%d | ready_for_war=%s | w_type=%s",
              len(enemies), len(enemies_here), len(enemies_in_range), len(finisher_targets),
              is_ready_for_war, w_type or "fist")
+    
+    # Record enemy sightings untuk movement prediction
+    for enemy in enemies:
+        enemy_id = enemy.get("id", "")
+        enemy_region = enemy.get("regionId", region_id)  # Default to our region if not specified
+        if enemy_id:
+            record_enemy_sighting(enemy_id, enemy_region or region_id, alive_count)
+    
+    # 🗺️ MOVEMENT PREDICTION: Check if enemies are likely to move to our location
+    for enemy in enemies_here:
+        enemy_id = enemy.get("id", "")
+        if enemy_id and enemy_id in movement_predictor.patterns:
+            # Get predictions for this enemy
+            conn_ids = [_get_region_id(c) for c in connections]
+            predictions = get_movement_prediction(enemy_id, region_id, conn_ids, alive_count)
+            if predictions:
+                top_pred = predictions[0]
+                if top_pred[1] >= 0.6:  # 60%+ probability
+                    log.info("🧠 MOVEMENT_PRED: Enemy %s has %.0f%% chance to move to %s",
+                             enemy.get("name", "?")[:12], top_pred[1] * 100, top_pred[0][:8])
 
     # Survival gate: TIME EFFICIENT - prioritize kills over survival
     # Mode-based minimum HP for combat - ULTRA AGGRESSIVE for maximum kills
@@ -509,10 +551,28 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         elif isinstance(dz, str):
             danger_ids.add(dz)  # Legacy fallback
     # Also mark currently-active death zones from connected regions
+    active_dz_ids = set()
     for conn in connections:
         resolved = _resolve_region(conn, view)
         if resolved and resolved.get("isDeathZone"):
             danger_ids.add(resolved.get("id", ""))
+            active_dz_ids.add(resolved.get("id", ""))
+    
+    # ☠️ DZ PREDICTOR: Record DZ state untuk pattern analysis
+    # Get all known region IDs dari visible regions
+    all_region_ids = [r.get("id", "") for r in visible_regions if isinstance(r, dict)]
+    if not all_region_ids and connected_regions:
+        # Fallback: use connected region IDs
+        all_region_ids = [_get_region_id(c) for c in connected_regions]
+    
+    # Record current DZ state
+    record_dz_state(
+        turn=getattr(decide_action, '_turn_count', 0),
+        alive_count=alive_count,
+        active_dz=list(active_dz_ids),
+        pending_dz=list(danger_ids),
+        all_regions=all_region_ids
+    )
 
     # Track visible agents for memory
     _track_agents(visible_agents, self_data.get("id", ""), region_id)
@@ -526,23 +586,89 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
 
     # ── Priority 1: DEATHZONE ESCAPE (overrides everything) ───────
     # Per game-systems.md: 1.34 HP/sec damage - bot dies fast!
+    # ☠️ ENHANCED with DZ Predictor untuk intelligent escape
     move_ep_cost = _get_move_ep_cost(region_terrain, region_weather)
+    
+    # Get DZ warning untuk current region
+    dz_warning = get_dz_warning(region_id, list(active_dz_ids), list(danger_ids), alive_count)
+    
+    # Log DZ warning jika level medium atau lebih tinggi
+    if dz_warning["warning_level"] in ["medium", "high", "critical"]:
+        log.warning("☠️ DZ_WARNING [%s]: %s (turns until danger: %s)",
+                    dz_warning["warning_level"].upper(),
+                    dz_warning["recommended_action"],
+                    dz_warning["turns_until_danger"])
+    
     if region.get("isDeathZone", False):
-        safe = _find_safe_region(connections, danger_ids, view)
-        if safe and ep >= move_ep_cost:
-            log.warning("🚨 IN DEATH ZONE! Escaping to %s (HP=%d)", safe, hp)
-            return {"action": "move", "data": {"regionId": safe},
-                    "reason": f"ESCAPE: In death zone! HP={hp} dropping fast (1.34/sec)"}
-        elif not safe:
-            log.error("🚨 IN DEATH ZONE but NO SAFE REGION! All neighbors are DZ!")
+        # ☠️ ENHANCED ESCAPE: Prioritize safest region dengan long-term safety
+        safe_conns = [c for c in connections if _get_region_id(c) not in danger_ids]
+        if safe_conns:
+            # Get safety analysis untuk each escape option
+            safe_region_ids = [_get_region_id(c) for c in safe_conns]
+            best_safe, safety_score, safety_reason = recommend_safe_position(
+                current_region=region_id,
+                available_regions=safe_region_ids,
+                active_dz=list(active_dz_ids),
+                pending_dz=list(danger_ids),
+                turn=alive_count,
+                our_hp=hp,
+                has_weapon=bool(equipped)
+            )
+            
+            if best_safe and ep >= move_ep_cost:
+                log.error("☠️ CRITICAL_DZ_ESCAPE: In DZ! Escaping to %s (safety=%.2f, %s)",
+                          best_safe[:8], safety_score, safety_reason)
+                return {"action": "move", "data": {"regionId": best_safe},
+                        "reason": f"CRITICAL_ESCAPE: DZ! Safety={safety_score:.2f} | {safety_reason}"}
+        else:
+            log.error("☠️ CRITICAL_DZ_TRAPPED: In DZ but NO SAFE REGIONS! HP=%d", hp)
 
     # ── Priority 1b: Pre-escape pending death zone ────────────────
+    # ☠️ ENHANCED dengan predictive warning
     if region_id in danger_ids:
-        safe = _find_safe_region(connections, danger_ids, view)
-        if safe and ep >= move_ep_cost:
-            log.warning("⚠️ Region %s becoming DZ soon! Escaping to %s", region_id[:8], safe)
-            return {"action": "move", "data": {"regionId": safe},
-                    "reason": "PRE-ESCAPE: Region becoming death zone soon"}
+        safe_conns = [c for c in connections if _get_region_id(c) not in danger_ids]
+        if safe_conns:
+            safe_region_ids = [_get_region_id(c) for c in safe_conns]
+            
+            # Get safest escape dengan long-term consideration
+            best_safe, safety_score, safety_reason = recommend_safe_position(
+                current_region=region_id,
+                available_regions=safe_region_ids,
+                active_dz=list(active_dz_ids),
+                pending_dz=list(danger_ids),
+                turn=alive_count,
+                our_hp=hp,
+                has_weapon=bool(equipped)
+            )
+            
+            if best_safe and ep >= move_ep_cost:
+                log.warning("☠️ DZ_PREESCAPE [%s]: Region becoming DZ! Escaping to %s (safety=%.2f, %s)",
+                            dz_warning["warning_level"].upper(),
+                            best_safe[:8], safety_score, safety_reason)
+                return {"action": "move", "data": {"regionId": best_safe},
+                        "reason": f"DZ_PREESCAPE: Becoming DZ! Safety={safety_score:.2f} | {safety_reason}"}
+    
+    # ── Priority 1c: Predictive DZ avoidance ───────────────────────
+    # ☠️ PROACTIVE: Move away dari predicted future DZ sebelum jadi danger
+    if alive_count <= 50:  # Late game - DZ shrinking faster
+        # Check if current region at risk (will be DZ dalam 2-3 turns)
+        if dz_warning["turns_until_danger"] in [2, 3] and not enemies_here:
+            safe_conns = [c for c in connections if _get_region_id(c) not in danger_ids]
+            if safe_conns:
+                safe_region_ids = [_get_region_id(c) for c in safe_conns]
+                
+                # Get center bias recommendation untuk late game
+                center_rec, center_reason = get_center_recommendation(
+                    region_id, safe_region_ids, alive_count
+                )
+                
+                if center_rec != region_id and ep >= move_ep_cost * 2:  # Have EP untuk proactive move
+                    log.info("☠️ DZ_PROACTIVE [%s]: %s | Moving to %s untuk safety",
+                             dz_warning["warning_level"].upper(),
+                             dz_warning["recommended_action"],
+                             center_rec[:8])
+                    return {"action": "move", "data": {"regionId": center_rec},
+                            "reason": f"DZ_PROACTIVE: {dz_warning['recommended_action'][:50]}"}
 
     # ── Priority 2: Curse resolution - DISABLED in v1.5.2 ─────────
     # Curse is temporarily disabled. Guardians no longer curse players.
@@ -802,10 +928,41 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                                  )
                              ))
                 
+                # 🏔️ TERRAIN ANALYSIS: Consider terrain advantage before engaging
+                enemy_weapon = (enemy.get("equippedWeapon") or {}).get("typeId", "fist")
+                terrain_analysis = get_terrain_advantage(
+                    our_weapon=equipped.get("typeId", "fist"),
+                    enemy_weapon=enemy_weapon,
+                    terrain=region_terrain,
+                    our_hp=hp,
+                    enemy_hp=enemy.get("hp", 100)
+                )
+                
+                # Log terrain advantage
+                if abs(terrain_analysis["our_advantage"]) >= 0.1:
+                    log.info("🏔️ TERRAIN_ADV: %.0f%% %s | Our %s vs Enemy %s di %s | %s",
+                             abs(terrain_analysis["our_advantage"]) * 100,
+                             "advantage" if terrain_analysis["our_advantage"] > 0 else "disadvantage",
+                             equipped.get("typeId", "fist"),
+                             enemy_weapon,
+                             region_terrain,
+                             terrain_analysis["confidence"])
+                
+                # Adjust attack decision based on terrain
+                if terrain_analysis["recommendation"] == "avoid" and terrain_analysis["confidence"] == "high":
+                    log.warning("🏔️ TERRAIN_AVOID: High disadvantage di %s, reconsidering combat", region_terrain)
+                    # Skip this enemy, check next one
+                    continue
+                
                 if should_attack:
-                    log.info("⚔️ %s: Engaging %s - %s", 
+                    # Add terrain bonus to attack reason
+                    terrain_info = ""
+                    if terrain_analysis["our_advantage"] >= 0.1:
+                        terrain_info = f" (+{terrain_analysis['our_advantage']*100:.0f}% terrain)"
+                    
+                    log.info("⚔️ %s: Engaging %s - %s%s", 
                              _get_weapon_strategy(equipped)["style"].upper(),
-                             enemy.get("name", "?"), reason)
+                             enemy.get("name", "?"), reason, terrain_info)
                     _track_attack(attack_type="melee")
                     
                     # Record encounter untuk learning
@@ -937,17 +1094,39 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         if hp < 25 and connections and enemies_here:
             safe_conns = [c for c in connections if _get_region_id(c) not in danger_ids]
             if safe_conns:
-                # Prefer regions without enemies
-                best_escape = safe_conns[0]
-                for c in safe_conns:
-                    if enemy_region_count.get(_get_region_id(c), 0) == 0:
-                        best_escape = c
-                        break
-                rid = _get_region_id(best_escape)
-                log.warning("🏃 EMERGENCY FLEE: HP=%d and NO HEALS! Running to %s", hp, rid[:8])
+                # 🧠 INTELLIGENT ESCAPE: Use movement prediction untuk safest route
+                conn_ids = [_get_region_id(c) for c in safe_conns]
+                escape_scores = {}
+                
+                for conn_id in conn_ids:
+                    base_score = 100
+                    # Penalty for known enemy presence
+                    if enemy_region_count.get(conn_id, 0) > 0:
+                        base_score -= 50
+                    
+                    # 🗺️ MOVEMENT PREDICTION: Check if any enemy is likely to move here
+                    for enemy in enemies_here:
+                        enemy_id = enemy.get("id", "")
+                        if enemy_id:
+                            predictions = get_movement_prediction(enemy_id, region_id, conn_ids, alive_count)
+                            for pred_region, prob in predictions:
+                                if pred_region == conn_id:
+                                    base_score -= int(prob * 40)  # Up to 40 point penalty
+                                    if prob >= 0.6:
+                                        log.info("🧠 ESCAPE_PRED: Avoiding %s - enemy %s has %.0f%% move chance",
+                                                 conn_id[:8], enemy.get("name", "?")[:8], prob * 100)
+                    
+                    escape_scores[conn_id] = base_score
+                
+                # Select best escape route
+                best_escape_id = max(escape_scores.keys(), key=lambda k: escape_scores[k])
+                best_conn = next((c for c in safe_conns if _get_region_id(c) == best_escape_id), safe_conns[0])
+                
+                rid = _get_region_id(best_conn)
+                log.warning("🏃 INTELLIGENT_FLEE: HP=%d avoiding predicted enemy moves, escaping to %s", hp, rid[:8])
                 _track_chase()
                 return {"action": "move", "data": {"regionId": rid},
-                        "reason": f"ESCAPE: Low HP ({hp}) and no healing items!"}
+                        "reason": f"INTELLIGENT_ESCAPE: Low HP ({hp}), avoiding predicted enemy movements"}
     
     # ── Priority 4: Kill Finisher (Attack before Looting!) ─────────
     # If there's a weak enemy in the SAME region, KILL them before they move or heal.
@@ -983,41 +1162,125 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             return {"action": "use_item", "data": {"itemId": heal["id"]},
                     "reason": f"HEAL: HP={hp}, area safe, using {heal.get('typeId', 'heal')}"}
 
-    # ── EP Conservation: save EP for DZ escape if pending DZ nearby ─
-    dz_threatening = region_id in danger_ids or any(
-        _get_region_id(c) in danger_ids for c in connections
-    )
-    ep_reserve = move_ep_cost if dz_threatening else 0
-
-    # ── Priority 6: EP recovery if EP low ─────────────────────────
-    # Energy drink (+5 EP) > rest (+1-2 EP). Use before falling back to rest.
-    # IMPROVED: Higher threshold to prevent excessive rest during flee loops
-    if ep <= 3:  # Only rest when critically low (was <= 5)
+    # ── ADVANCED EP MANAGEMENT SYSTEM ─────────────────────────────
+    # 🚨 EP CRISIS PREVENTION: Proactive EP conservation untuk DZ escape
+    
+    # Calculate DZ threat levels
+    is_in_dz = region.get("isDeathZone", False)
+    is_dz_imminent = region_id in danger_ids  # Will become DZ next turn
+    is_dz_nearby = any(_get_region_id(c) in danger_ids for c in connections)
+    
+    # 🔴 DZ THREAT LEVELS:
+    # - CRITICAL: In DZ or will be DZ next turn → need immediate escape + backup
+    # - HIGH: DZ nearby → need escape reserve
+    # - MEDIUM: DZ in 2 connections away → need conservation
+    # - LOW: No DZ nearby → normal EP usage
+    
+    if is_in_dz or is_dz_imminent:
+        # 🔴 CRITICAL: Need EP untuk escape + 1 backup move + potential combat
+        # Minimum: move_ep_cost (escape) + move_ep_cost (backup) + COMBAT_MIN_EP (emergency combat)
+        ep_reserve = (move_ep_cost * 2) + COMBAT_MIN_EP + 1  # +1 buffer
+        dz_threat_level = "CRITICAL"
+    elif is_dz_nearby:
+        # 🟠 HIGH: Need EP untuk escape + backup
+        ep_reserve = (move_ep_cost * 2) + 1
+        dz_threat_level = "HIGH"
+    else:
+        # 🟢 LOW: Normal EP usage
+        ep_reserve = move_ep_cost  # Just keep normal move reserve
+        dz_threat_level = "LOW"
+    
+    # Log EP status untuk debugging
+    log.info("⚡ EP_MANAGEMENT: EP=%d/%d | Reserve=%d | DZ_Threat=%s | InDZ=%s | Imminent=%s | Nearby=%s",
+             ep, max_ep, ep_reserve, dz_threat_level, is_in_dz, is_dz_imminent, is_dz_nearby)
+    
+    # 🚨 EP CRISIS MODE: EP rendah + DZ approaching = STOP semua aktivitas boros EP
+    ep_crisis_threshold = ep_reserve + 2  # Buffer minimum
+    is_ep_crisis = ep <= ep_crisis_threshold and (is_in_dz or is_dz_imminent or is_dz_nearby)
+    
+    if is_ep_crisis:
+        log.warning("🚨 EP_CRISIS_MODE: EP=%d <= threshold=%d with DZ threat! STOP non-essential actions!",
+                    ep, ep_crisis_threshold)
+    
+    # ── Priority 6: EP RECOVERY (Crisis Prevention) ───────────────
+    # 🔄 PROACTIVE EP RECOVERY: Jangan tunggu sampai EP = 0!
+    
+    # EP EMERGENCY: Hampir tidak bisa move + ada DZ threat
+    if ep <= ep_reserve and (is_in_dz or is_dz_imminent or is_dz_nearby):
+        log.error("🚨 EP_EMERGENCY: EP=%d <= reserve=%d with DZ threat! FORCED RECOVERY!", ep, ep_reserve)
+        
+        # Priority 1: Energy drink (instant +5 EP)
         energy_drink = _find_energy_drink(inventory)
         if energy_drink:
-            log.info("EP_CONSERVE: EP=%d critically low, using energy drink (+5 EP)", ep)
+            log.info("⚡ EP_EMERGENCY_RECOVERY: Using energy drink (+5 EP) untuk DZ escape!")
             return {"action": "use_item", "data": {"itemId": energy_drink["id"]},
-                    "reason": f"EP CONSERVE: EP={ep} critically low, using energy drink (+5 EP)"}
-        # No energy drink — force rest to recover EP
-        if not enemies_here and not region.get("isDeathZone"):
-            log.info("EP_CONSERVE: EP=%d critically low, forcing rest (+1-2 EP)", ep)
+                    "reason": f"EP EMERGENCY: EP={ep} critical for DZ escape, using energy drink"}
+        
+        # Priority 2: Forced rest (hanya jika tidak ada enemy di same region)
+        if not enemies_here and not is_in_dz:
+            log.info("⚡ EP_EMERGENCY_REST: EP=%d critical, resting untuk recover (+1-2 EP)", ep)
             return {"action": "rest", "data": {},
-                    "reason": f"EP CONSERVE: EP={ep} critically low, resting to recover"}
+                    "reason": f"EP EMERGENCY: Resting to recover EP for DZ escape"}
     
-    # SMART EP MANAGEMENT: Only rest if no enemies nearby and EP is very low
-    elif ep <= 2 and not enemies_here and not enemies_in_range and not region.get("isDeathZone"):
-        log.info("EP_SMART_REST: EP=%d very low, no enemies nearby - strategic rest", ep)
-        return {"action": "rest", "data": {},
-                "reason": f"EP SMART REST: EP={ep} very low, safe area rest"}
+    # EP LOW: Below safe threshold untuk DZ area
+    ep_low_threshold = ep_reserve + 3 if (is_in_dz or is_dz_imminent or is_dz_nearby) else 4
+    
+    if ep <= ep_low_threshold and not is_in_dz:
+        # Proactive EP conservation sebelum crisis
+        energy_drink = _find_energy_drink(inventory)
+        if energy_drink:
+            log.info("⚡ EP_PROACTIVE: EP=%d low untuk DZ safety, using energy drink (+5 EP)", ep)
+            return {"action": "use_item", "data": {"itemId": energy_drink["id"]},
+                    "reason": f"EP PROACTIVE: EP={ep} low untuk DZ safety, using energy drink"}
+        
+        # Rest jika safe (no enemies)
+        if not enemies_here and not enemies_in_range:
+            log.info("⚡ EP_PROACTIVE_REST: EP=%d low untuk DZ safety, resting (+1-2 EP)", ep)
+            return {"action": "rest", "data": {},
+                    "reason": f"EP PROACTIVE: Resting untuk EP safety margin (DZ threat present)"}
+    
+    # EP MODERATE: Conservation mode (no aggressive EP spending)
+    ep_conservation_threshold = ep_reserve + 5 if (is_dz_nearby or is_dz_imminent) else 6
+    
+    if ep <= ep_conservation_threshold and not enemies_here:
+        # Reduce non-essential EP spending
+        log.info("⚡ EP_CONSERVATION: EP=%d, entering conservation mode (DZ threat present)", ep)
 
     # ── Priority 7: Smart Agent Combat (Kill Hunting) ──────────────
     # "Predator Cerdas" logic: Only hunt if we can afford it
     weather_ok = region_weather not in ("storm", "fog") or w_range >= 1
     ep_budget = COMBAT_MIN_EP + move_ep_cost + ep_reserve
+    
+    # 🚨 EP CRISIS: Skip expensive combat actions saat EP rendah + DZ threat
+    if is_ep_crisis and enemies_here:
+        # Hanya combat jika DIRENKAN (self-defense) atau enemy sangat lemah
+        strongest_enemy_hp = max(e.get("hp", 100) for e in enemies_here)
+        weakest_enemy_hp = min(e.get("hp", 100) for e in enemies_here)
+        
+        # Crisis combat rules:
+        # 1. Self-defense: if HP < 40, fight untuk survival
+        # 2. Finisher: if enemy HP < 20 (one-shot kill, minimal EP cost)
+        # 3. Otherwise: SKIP combat, prioritize EP conservation
+        
+        if hp < 40:
+            log.warning("🚨 EP_CRISIS_COMBAT: EP low but HP=%d < 40 - SELF DEFENSE combat allowed!", hp)
+        elif weakest_enemy_hp < 20 and ep >= COMBAT_MIN_EP:
+            log.info("⚡ EP_CRISIS_FINISHER: EP low but enemy HP=%d < 20 - finisher combat allowed", weakest_enemy_hp)
+        else:
+            log.warning("🚨 EP_CRISIS_SKIP: EP=%d crisis + no urgent threat - SKIP combat untuk EP conservation!", ep)
+            # Skip ke EP recovery
+            energy_drink = _find_energy_drink(inventory)
+            if energy_drink:
+                return {"action": "use_item", "data": {"itemId": energy_drink["id"]},
+                        "reason": f"EP CRISIS: Skipping combat, using energy drink untuk DZ escape"}
+            if not is_in_dz:
+                return {"action": "rest", "data": {},
+                        "reason": f"EP CRISIS: Skipping combat, resting untuk EP recovery"}
 
     # FAST PATH A: Enemies in SAME region (or no regionId) — attack immediately!
     # FORCE SAME REGION COMBAT: Always attack enemies in same region with sniper
-    if enemies_here and ep >= COMBAT_MIN_EP and can_afford_combat and weather_ok:
+    # EXCEPTION: EP crisis mode - only fight jika self-defense atau finisher
+    if enemies_here and ep >= COMBAT_MIN_EP and can_afford_combat and weather_ok and not is_ep_crisis:
         log.info("🎯 SAME_REGION_FORCE_COMBAT: %d enemies in same region - ATTACKING!", len(enemies_here))
         
         # PRIORITY: Attack weakest enemy first for quick kills
@@ -1099,14 +1362,35 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             if w_range >= 1 and in_same_region and connections and should_kite:
                 safe_conns = [c for c in connections if _get_region_id(c) not in danger_ids]
                 if safe_conns:
-                    best_escape = safe_conns[0]
-                    for c in safe_conns:
-                        if enemy_region_count.get(_get_region_id(c), 0) == 0:
-                            best_escape = c
-                            break
-                    rid = _get_region_id(best_escape)
+                    # 🧠 INTELLIGENT KITE: Use movement prediction untuk safest kite direction
+                    conn_ids = [_get_region_id(c) for c in safe_conns]
+                    kite_scores = {}
+                    
+                    for conn_id in conn_ids:
+                        score = 100
+                        # Prefer regions without known enemies
+                        if enemy_region_count.get(conn_id, 0) == 0:
+                            score += 30
+                        
+                        # 🗺️ MOVEMENT PREDICTION: Avoid regions enemies likely to move to
+                        for enemy in enemies_here:
+                            enemy_id = enemy.get("id", "")
+                            if enemy_id:
+                                predictions = get_movement_prediction(enemy_id, region_id, conn_ids, alive_count)
+                                for pred_region, prob in predictions:
+                                    if pred_region == conn_id and prob >= 0.5:
+                                        score -= int(prob * 25)
+                        
+                        kite_scores[conn_id] = score
+                    
+                    # Select best kite target
+                    best_kite_id = max(kite_scores.keys(), key=lambda k: kite_scores[k])
+                    best_conn = next((c for c in safe_conns if _get_region_id(c) == best_kite_id), safe_conns[0])
+                    
+                    rid = _get_region_id(best_conn)
+                    log.info("🎯 INTELLIGENT_KITE: Repositioning to %s for %s range (prediction-aware)", rid[:8], w_type)
                     return {"action": "move", "data": {"regionId": rid},
-                            "reason": f"KITE: Repositioning for {w_type} range advantage"}
+                            "reason": f"INTELLIGENT_KITE: Repositioning for {w_type} range (prediction-aware)"}
 
             # Standard attack if in range
             if _is_in_range(target["agent"], region_id, w_range, connections):
@@ -1281,9 +1565,13 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     guardian_heal_ok = healing_count >= 1 or hp >= 75
     nearby_players = len(enemies_here) + len(enemies_in_range)
     guardian_weather_ok = region_weather not in ("storm", "fog") or w_range >= 1
-    if (guardians and hp >= max(GUARDIAN_FARM_MIN_HP, 60) and guardian_weapon_ok
+    # 🚨 EP CRISIS: Skip guardian farming saat EP rendah + DZ threat
+    # Guardian farming boros EP (combat + potential chase), hindari saat EP crisis
+    if is_ep_crisis and guardians:
+        log.warning("🚨 EP_CRISIS_SKIP_GUARDIAN: EP=%d crisis - SKIP guardian farming untuk EP conservation!", ep)
+    elif (guardians and hp >= max(GUARDIAN_FARM_MIN_HP, 60) and guardian_weapon_ok
             and guardian_heal_ok and nearby_players == 0 and guardian_weather_ok):
-        # EP budget: combat EP + move EP for potential chase
+        # EP budget: combat EP + move EP untuk potential chase
         ep_budget = COMBAT_MIN_EP + move_ep_cost + ep_reserve
         if ep >= ep_budget:
             target = _select_best_target(
@@ -1359,7 +1647,14 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     
     # Hunt at ALL game phases if ready and no enemies nearby
     # TIME EFFICIENT: Maximum kills in 59 turns = 1 kill per turn target
+    # 🚨 EP CRISIS: Skip hunting saat EP rendah + DZ threat
     is_ready_to_hunt = hp >= 25 and ep >= 3  # Even lower threshold for time efficiency
+    
+    if is_ep_crisis:
+        # DANGER: EP crisis + DZ approaching = NO HUNTING!
+        log.warning("🚨 EP_CRISIS_SKIP_HUNT: EP=%d crisis + DZ threat - SKIP HUNTING untuk EP conservation!", ep)
+        is_ready_to_hunt = False
+    
     if is_ready_to_hunt and not enemies_here and not enemies_in_range:
         # Cari region dengan musuh untuk dihunt
         best_hunt_target = None
@@ -1402,6 +1697,45 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             _track_chase()
             return {"action": "move", "data": {"regionId": best_hunt_target},
                     "reason": f"ACTIVE_HUNTING: Seeking kills ({hunt_phase}, {alive_count} alive)"}
+    
+    # 🎯 AMBUSH OPPORTUNITY: Check if enemies are likely to move to adjacent regions
+    if is_ready_to_hunt and not enemies_here:
+        for enemy in enemies:
+            enemy_id = enemy.get("id", "")
+            enemy_region = enemy.get("regionId", "")
+            if not enemy_id or not enemy_region:
+                continue
+            
+            # Check if enemy is in adjacent region
+            if enemy_region in [_get_region_id(c) for c in connections]:
+                # Get movement predictions untuk this enemy
+                enemy_conn_ids = []
+                for conn in connections:
+                    if _get_region_id(conn) == enemy_region:
+                        # Get connections of enemy's region
+                        resolved = _resolve_region(conn, {"visibleRegions": visible_regions})
+                        if resolved:
+                            enemy_conn_ids = [_get_region_id(c) for c in resolved.get("connections", [])]
+                        break
+                
+                if enemy_conn_ids and region_id in enemy_conn_ids:
+                    # Enemy could potentially move to our region!
+                    predictions = get_movement_prediction(enemy_id, enemy_region, enemy_conn_ids, alive_count)
+                    
+                    for pred_region, prob in predictions:
+                        if pred_region == region_id and prob >= 0.5:
+                            # 50%+ chance enemy will come here - set up ambush!
+                            log.info("🎯 AMBUSH_SETUP: Enemy %s has %.0f%% chance to move here from %s",
+                                     enemy.get("name", "?")[:12], prob * 100, enemy_region[:8])
+                            # Camp and wait for enemy
+                            if hp < 80:
+                                log.info("🏕️ AMBUSH_CAMP: Resting and waiting for enemy (HP=%d)", hp)
+                                return {"action": "rest", "data": {},
+                                        "reason": f"AMBUSH: Waiting for {enemy.get('name','?')} (predicted {prob*100:.0f}% move chance)"}
+                            else:
+                                log.info("🎯 AMBUSH_HOLD: Holding position for enemy approach")
+                                # Don't move - hold position for ambush
+                                return None
 
     # ── Priority 9b: Strategic movement ────────────────────────────
     # COMBAT PRIORITY: Only move if no immediate combat opportunities
@@ -1457,7 +1791,17 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # ── Priority 9b: CONTINUOUS EXPLORATION (No Idle Behavior) ─────────────
     # ALWAYS explore when no enemies detected and EP is sufficient
     # Only rest when EP is critically low or weather is severe
+    # 🚨 EP CRISIS: Skip non-essential exploration saat EP rendah + DZ threat
     _consecutive_idle_turns = getattr(decide_action, '_consecutive_idle_turns', 0)
+    
+    if is_ep_crisis:
+        # DANGER: EP crisis + DZ approaching = NO EXPLORATION!
+        log.warning("🚨 EP_CRISIS_SKIP_EXPLORE: EP=%d crisis - SKIP exploration untuk EP conservation!", ep)
+        # Force rest untuk EP recovery
+        if not enemies_here and not is_in_dz:
+            log.info("⚡ EP_CRISIS_REST: EP=%d crisis, resting untuk recover (+1-2 EP)", ep)
+            return {"action": "rest", "data": {},
+                    "reason": f"EP CRISIS: Resting untuk EP recovery (DZ threat)"}
     
     if not has_targets and ep >= move_ep_cost and not enemies_here:
         # FORCE EXPLORATION: Never stay idle when EP is sufficient and no enemies
@@ -1519,9 +1863,18 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # ── Priority 10: Rest (EP < 4 and safe) ───────────────────────
     # Also rest if weather is storm and no urgent targets
     if (ep < 4 or weather_delay) and not enemies_here and not region.get("isDeathZone") and region_id not in danger_ids:
-        return {"action": "rest", "data": {},
-                "reason": f"⏸️ REST: EP={ep}/{max_ep}, area is safe (+1 bonus EP)"}
+        result = {"action": "rest", "data": {},
+                  "reason": f"⏸️ REST: EP={ep}/{max_ep}, area is safe (+1 bonus EP)"}
+        # ⏱️ PERFORMANCE: Record timing
+        end_decision_timing(decision_start_time, "rest", latency_game_phase, alive_count)
+        # ⏱️ Check untuk periodic performance report
+        check_performance()
+        return result
 
+    # ⏱️ PERFORMANCE: Record timing untuk wait decision
+    end_decision_timing(decision_start_time, "wait", latency_game_phase, alive_count)
+    # ⏱️ Check untuk periodic performance report
+    check_performance()
     return None  # tunggu for next turn
 
 
@@ -2754,6 +3107,37 @@ def _choose_move_target(connections, danger_ids: set,
                 if w_type == "sniper" and terrain == "hills": score += 15
                 elif w_type in ("katana", "sword") and terrain in ("forest", "ruins"): score += 10
                 elif terrain == "plains": score -= 5 
+            
+            # 🏔️ TERRAIN COMBAT BONUS: Optimal positioning untuk weapon matchup
+            if has_weapon and enemy_count > 0:
+                # Get average enemy weapons di region ini
+                region_enemies = [e for e in enemies if e.get("regionId") == rid]
+                if region_enemies:
+                    enemy_weapons = [(e.get("equippedWeapon") or {}).get("typeId", "fist") for e in region_enemies]
+                    most_common_enemy_weapon = max(set(enemy_weapons), key=enemy_weapons.count) if enemy_weapons else "fist"
+                    
+                    # Calculate terrain advantage untuk our weapon vs enemy weapon
+                    from bot.strategy.terrain_master import get_terrain_advantage
+                    terrain_analysis = get_terrain_advantage(
+                        our_weapon=w_type,
+                        enemy_weapon=most_common_enemy_weapon,
+                        terrain=terrain,
+                        our_hp=my_hp,
+                        enemy_hp=50  # Assume average enemy HP
+                    )
+                    
+                    # Apply terrain bonus/penalty ke score
+                    terrain_bonus = int(terrain_analysis["our_advantage"] * 20)  # Scale to scoring system
+                    score += terrain_bonus
+                    
+                    if terrain_bonus >= 5:
+                        log.info("🏔️ TERRAIN_POSITION: %s gives %s %.0f%% advantage vs %s, +%d score",
+                                 terrain, w_type, terrain_analysis["our_advantage"]*100, 
+                                 most_common_enemy_weapon, terrain_bonus)
+                    elif terrain_bonus <= -5:
+                        log.warning("🏔️ TERRAIN_AVOID: %s gives %s %.0f%% disadvantage vs %s, %d score",
+                                    terrain, w_type, abs(terrain_analysis["our_advantage"])*100,
+                                    most_common_enemy_weapon, terrain_bonus)
 
             # 4. ENEMY ATTRACTION (Hunter / Steal Kill Logic)
             # HARD BLOCK: Never move into high enemy zones if not ready for war
