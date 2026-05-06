@@ -153,6 +153,12 @@ _combat_metrics: dict = {
     "turns_alive": 0,
 }
 
+# Enemy HP tracking for finisher logic
+_enemy_hp_memory: dict = {}  # {enemy_id: {hp, last_seen_turn, last_damage_estimate}}
+# Target persistence for mid-kill tracking
+_current_target: dict = None  # {id, name, initial_hp, region_id, start_turn}
+_last_attack_result: dict = None  # {turn, target_id, damage_dealt, was_successful}
+
 
 def _resolve_region(entry, view: dict):
     """Resolve a connectedRegions entry to a full region object.
@@ -181,7 +187,7 @@ def _get_region_id(entry) -> str:
 
 def reset_game_state():
     """Reset per-game tracking state. Call when game ends."""
-    global _known_agents, _map_knowledge, _visited_regions, _guardian_locations, _planned_next_action, _failed_actions, _current_turn, _combat_metrics, _combat_hotspots
+    global _known_agents, _map_knowledge, _visited_regions, _guardian_locations, _planned_next_action, _failed_actions, _current_turn, _combat_metrics, _combat_hotspots, _enemy_hp_memory, _current_target, _last_attack_result
     # Log final metrics before reset
     _log_combat_metrics()
     _known_agents = {}
@@ -198,6 +204,10 @@ def reset_game_state():
         "damage_dealt": 0, "damage_taken": 0, "finisher_kills": 0, "ranged_attacks": 0,
         "chase_attempts": 0, "combat_avoided": 0, "enemies_seen": 0, "turns_alive": 0,
     }
+    # Reset enemy tracking
+    _enemy_hp_memory = {}
+    _current_target = None
+    _last_attack_result = None
     log.info("🔄 Strategy brain reset for new game")
 
 
@@ -251,6 +261,93 @@ def track_failed_action(action_type: str, item_id: str = None):
     # Blacklist for 5 turns
     _failed_actions[key] = _current_turn + 5
     log.warning("Blacklisting failed action: %s until turn %d", key, _failed_actions[key])
+
+
+def _update_enemy_hp_memory(enemy_id: str, current_hp: int, turn: int):
+    """Update enemy HP memory for tracking damage and finisher opportunities."""
+    global _enemy_hp_memory
+    if enemy_id not in _enemy_hp_memory:
+        _enemy_hp_memory[enemy_id] = {"hp": current_hp, "last_seen_turn": turn, "last_damage_estimate": 0}
+    else:
+        old_hp = _enemy_hp_memory[enemy_id]["hp"]
+        damage_taken = old_hp - current_hp
+        _enemy_hp_memory[enemy_id] = {
+            "hp": current_hp, 
+            "last_seen_turn": turn, 
+            "last_damage_estimate": damage_taken
+        }
+        if damage_taken > 0:
+            log.debug("💔 ENEMY_HP_TRACK: %s took %d damage (HP: %d→%d)", 
+                     enemy_id[:8], damage_taken, old_hp, current_hp)
+
+
+def _get_enemy_hp_estimate(enemy_id: str) -> int:
+    """Get estimated HP for enemy from memory or return default."""
+    if enemy_id in _enemy_hp_memory:
+        return _enemy_hp_memory[enemy_id]["hp"]
+    return 100  # Default max HP
+
+
+def _set_current_target(enemy: dict, turn: int):
+    """Set current target for persistent tracking."""
+    global _current_target
+    _current_target = {
+        "id": enemy.get("id", ""),
+        "name": enemy.get("name", "?"),
+        "initial_hp": enemy.get("hp", 100),
+        "region_id": enemy.get("regionId", ""),
+        "start_turn": turn
+    }
+    log.info("🎯 TARGET_LOCK: Locked onto %s (HP=%d) for finisher", 
+             _current_target["name"], _current_target["initial_hp"])
+
+
+def _clear_current_target():
+    """Clear current target when dead or lost."""
+    global _current_target
+    if _current_target:
+        log.info("🎯 TARGET_CLEAR: Cleared target %s", _current_target["name"])
+        _current_target = None
+
+
+def _is_current_target_still_valid(enemies: list, current_region_id: str) -> bool:
+    """Check if current target is still alive and in combat range."""
+    if not _current_target:
+        return False
+    
+    target_id = _current_target["id"]
+    target_region = _current_target["region_id"]
+    
+    # Check if target is still alive and visible
+    for enemy in enemies:
+        if enemy.get("id") == target_id and enemy.get("isAlive", True):
+            # Target is still alive - check if still in same region or adjacent (for ranged)
+            enemy_region = enemy.get("regionId", current_region_id)
+            if (enemy_region == current_region_id or 
+                enemy_region == target_region or 
+                not enemy_region):  # No regionId means same region
+                return True
+    
+    return False
+
+
+def _estimate_damage_to_target(attacker_atk: int, weapon_bonus: int, target_def: int, weather: str = "clear") -> int:
+    """Estimate damage that would be dealt to target."""
+    return calc_damage(attacker_atk, weapon_bonus, target_def, weather)
+
+
+def _can_finish_target(enemy: dict, our_atk: int, weapon_bonus: int, weather: str) -> bool:
+    """Check if we can finish target in one attack."""
+    target_hp = enemy.get("hp", 100)
+    target_def = enemy.get("def", 5)
+    estimated_damage = _estimate_damage_to_target(our_atk, weapon_bonus, target_def, weather)
+    
+    can_finish = estimated_damage >= target_hp
+    if can_finish:
+        log.info("💀 FINISHER_OPPORTUNITY: %s (HP=%d) - our damage=%d ≥ target HP", 
+                 enemy.get("name", "?")[:12], target_hp, estimated_damage)
+    
+    return can_finish
 
 
 def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict | None:
@@ -541,10 +638,50 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     # Record enemy sightings untuk movement prediction
     for enemy in enemies:
         enemy_id = enemy.get("id", "")
+        enemy_hp = enemy.get("hp", 100)
         enemy_region = enemy.get("regionId", region_id)  # Default to our region if not specified
         if enemy_id:
             record_enemy_sighting(enemy_id, enemy_region or region_id, alive_count)
+            # Update HP memory for tracking
+            _update_enemy_hp_memory(enemy_id, enemy_hp, _current_turn)
     
+    # 🎯 TARGET PERSISTENCE: Check if we have a current target that's still valid
+    # This prevents switching targets mid-kill and ensures finisher behavior
+    current_target_valid = _is_current_target_still_valid(enemies, region_id)
+    if current_target_valid and ep >= COMBAT_MIN_EP:
+        # We have a valid current target - continue attacking it
+        target_id = _current_target["id"]
+        target_enemy = None
+        for enemy in enemies:
+            if enemy.get("id") == target_id:
+                target_enemy = enemy
+                break
+        
+        if target_enemy:
+            target_hp = target_enemy.get("hp", 100)
+            target_def = target_enemy.get("def", 5)
+            estimated_damage = _estimate_damage_to_target(atk, weapon_bonus, target_def, region_weather)
+            
+            log.info("🎯 TARGET_PERSISTENCE: Continuing attack on %s (HP=%d, est_damage=%d)", 
+                     _current_target["name"], target_hp, estimated_damage)
+            
+            # Check if this is a finisher opportunity
+            if _can_finish_target(target_enemy, atk, weapon_bonus, region_weather):
+                log.info("💀 FINISHER_EXECUTION: %s (HP=%d) - FINISHING NOW!", 
+                         target_enemy.get("name", "?")[:12], target_hp)
+                _track_attack(attack_type="melee" if w_range == 0 else "ranged", is_finisher=True)
+            else:
+                _track_attack(attack_type="melee" if w_range == 0 else "ranged")
+            
+            return {"action": "attack",
+                    "data": {"targetId": target_id, "targetType": "agent"},
+                    "reason": f"TARGET_PERSISTENCE: {_current_target['name']} (HP={target_hp}) - Continuing engagement"}
+    else:
+        # Clear invalid target
+        if _current_target:
+            log.info("🎯 TARGET_INVALID: Clearing invalid target %s", _current_target["name"])
+            _clear_current_target()
+
     # 🗺️ MOVEMENT PREDICTION: Check if enemies are likely to move to our location
     for enemy in enemies_here:
         enemy_id = enemy.get("id", "")
@@ -1154,6 +1291,16 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     if w_type == "sniper" and enemies_in_range and w_range >= 1 and ep >= COMBAT_MIN_EP and weather_ok:
         log.info("🎯 AGGRESSIVE_SNIPER: %d enemies in range - KILL THEM ALL!", len(enemies_in_range))
         
+        # Check if we have a current target to persist
+        if _current_target and _current_target["id"] in [e.get("id") for e in enemies_in_range]:
+            target_enemy = next(e for e in enemies_in_range if e.get("id") == _current_target["id"])
+            log.info("🎯 SNIPER_PERSISTENCE: Continuing sniper attack on %s", _current_target["name"])
+            _set_current_target(target_enemy, _current_turn)  # Update target data
+            _track_attack(attack_type="ranged")
+            return {"action": "attack",
+                    "data": {"targetId": target_enemy["id"], "targetType": "agent"},
+                    "reason": f"🔫SNIPER_PERSISTENCE: {_current_target['name']} - Sniper dominance!"}
+        
         # Attack ANY enemy in range - no threat assessment for sniper
         # Prioritize weakest for quick kills, but ANY target is acceptable
         weakest = _select_weakest(enemies_in_range)
@@ -1161,6 +1308,9 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             enemy_weapon = weakest.get("equippedWeapon", {}).get("typeId", "fist")
             enemy_hp = weakest.get("hp", "?")
             enemy_ep = weakest.get("ep", "?")
+            
+            # Set this as our current target for persistence
+            _set_current_target(weakest, _current_turn)
             
             log.info("🏹 SNIPER_KILL: Targeting %s (HP=%s EP=%s Weapon=%s) - 🔫SNIPER DOMINANCE!",
                      weakest.get("name", "?"), enemy_hp, enemy_ep, enemy_weapon)
@@ -1171,11 +1321,24 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     
     # Non-sniper ranged combat (normal rules apply)
     elif enemies_in_range and w_range >= 1 and ep >= COMBAT_MIN_EP and weather_ok:
+        # Check if we have a current target to persist
+        if _current_target and _current_target["id"] in [e.get("id") for e in enemies_in_range]:
+            target_enemy = next(e for e in enemies_in_range if e.get("id") == _current_target["id"])
+            log.info("🎯 RANGED_PERSISTENCE: Continuing ranged attack on %s", _current_target["name"])
+            _set_current_target(target_enemy, _current_turn)  # Update target data
+            _track_attack(attack_type="ranged")
+            return {"action": "attack",
+                    "data": {"targetId": target_enemy["id"], "targetType": "agent"},
+                    "reason": f"RANGED_PERSISTENCE: {_current_target['name']} - Continuing engagement"}
+        
         log.info("🎯 URGENT_COMBAT: %d enemies in range - attempting attack!", len(enemies_in_range))
         
         # Try to attack even during cooldown - game will reject if not allowed
         weakest = _select_weakest(enemies_in_range)
         if weakest:
+            # Set this as our current target for persistence
+            _set_current_target(weakest, _current_turn)
+            
             log.info("🏹 URGENT_RANGED_ATTACK: Targeting weakest %s (HP=%s)",
                      weakest.get("name", "?"), weakest.get("hp", "?"))
             _track_attack(attack_type="ranged")
@@ -1186,16 +1349,44 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     
     # Same region enemies - highest priority
     if enemies_here and ep >= COMBAT_MIN_EP and weather_ok:
+        # Check if we have a current target to persist
+        if _current_target and _current_target["id"] in [e.get("id") for e in enemies_here]:
+            target_enemy = next(e for e in enemies_here if e.get("id") == _current_target["id"])
+            log.info("🎯 MELEE_PERSISTENCE: Continuing melee attack on %s", _current_target["name"])
+            _set_current_target(target_enemy, _current_turn)  # Update target data
+            
+            # Check if this is a finisher opportunity
+            if _can_finish_target(target_enemy, atk, weapon_bonus, region_weather):
+                log.info("💀 MELEE_FINISHER: %s (HP=%d) - FINISHING NOW!", 
+                         target_enemy.get("name", "?")[:12], target_enemy.get("hp", 100))
+                _track_attack(attack_type="melee", is_finisher=True)
+            else:
+                _track_attack(attack_type="melee")
+            
+            return {"action": "attack",
+                    "data": {"targetId": target_enemy["id"], "targetType": "agent"},
+                    "reason": f"MELEE_PERSISTENCE: {_current_target['name']} (HP={target_enemy.get('hp','?')}) - Continuing engagement"}
+        
         log.info("🎯 URGENT_SAME_REGION: %d enemies in same region - attacking!", len(enemies_here))
         weakest = _select_weakest(enemies_here)
         if weakest:
+            # Set this as our current target for persistence
+            _set_current_target(weakest, _current_turn)
+            
+            # Check if this is a finisher opportunity
+            if _can_finish_target(weakest, atk, weapon_bonus, region_weather):
+                log.info("💀 MELEE_FINISHER: %s (HP=%d) - FINISHING NOW!", 
+                         weakest.get("name", "?")[:12], weakest.get("hp", 100))
+                _track_attack(attack_type="melee", is_finisher=True)
+            else:
+                _track_attack(attack_type="melee")
+            
             log.info("⚔️ URGENT_MELEE_ATTACK: Targeting weakest %s (HP=%s)",
                      weakest.get("name", "?"), weakest.get("hp", "?"))
-            _track_attack(attack_type="melee")
             return {"action": "attack",
                     "data": {"targetId": weakest["id"], "targetType": "agent"},
                     "reason": f"URGENT_COMBAT: Attacking {weakest.get('name','?')} "
-                              f"(HP={weakest.get('hp','?')} in same region"}
+                              f"(HP={weakest.get('hp','?')} in same region"}}
 
     # If cooldown active, only free actions allowed
     if not can_act:
