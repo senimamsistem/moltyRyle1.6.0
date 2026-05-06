@@ -1386,7 +1386,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             return {"action": "attack",
                     "data": {"targetId": weakest["id"], "targetType": "agent"},
                     "reason": f"URGENT_COMBAT: Attacking {weakest.get('name','?')} "
-                              f"(HP={weakest.get('hp','?')} in same region"}}
+                              f"(HP={weakest.get('hp','?')} in same region)"}
 
     # If cooldown active, only free actions allowed
     if not can_act:
