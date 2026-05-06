@@ -574,6 +574,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     has_weapon = w_type in ("katana", "sniper", "sword", "pistol", "dagger", "bow")
     healing_count = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS])
     w_range = WEAPONS.get(w_type, {}).get("range", 0)
+    weapon_bonus = WEAPONS.get(w_type, {}).get("bonus", 0)  # Add missing weapon_bonus calculation
 
     # enemies_here: agents in the same region OR agents with no regionId (API may omit it)
     # Per api-summary.md, visibleAgents does NOT guarantee a regionId field.
