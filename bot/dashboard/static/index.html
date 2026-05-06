@@ -64,11 +64,46 @@
 
       <!-- Log Panel — only visible on dashboard -->
       <div class="log-panel">
-        <h3>Live Logs</h3>
-        <div class="log-tabs">
-          <div class="log-tab active" onclick="switchLogTab('all',this)">All</div>
-          <span id="agent-log-tabs"></span>
+        <h3>📋 Live Logs <span class="log-count">(0)</span></h3>
+        
+        <!-- Log Stats -->
+        <div class="log-stats">
+          <div class="log-stat">
+            <span class="log-stat-dot" style="background: var(--cyan)"></span>
+            <span id="log-info-count">0 info</span>
+          </div>
+          <div class="log-stat">
+            <span class="log-stat-dot" style="background: var(--amber)"></span>
+            <span id="log-warning-count">0 warnings</span>
+          </div>
+          <div class="log-stat">
+            <span class="log-stat-dot" style="background: var(--red)"></span>
+            <span id="log-error-count">0 errors</span>
+          </div>
         </div>
+        
+        <!-- Log Controls -->
+        <div class="log-controls">
+          <input type="text" placeholder="🔍 Search logs..." class="log-search" id="log-search">
+          
+          <div class="log-filter-group">
+            <button class="log-btn active" data-filter="all" onclick="filterLogs('all', this)">All</button>
+            <button class="log-btn" data-filter="brain" onclick="filterLogs('brain', this)">🧠 Brain</button>
+            <button class="log-btn" data-filter="api" onclick="filterLogs('api', this)">🌐 API</button>
+            <button class="log-btn" data-filter="game" onclick="filterLogs('game', this)">🎮 Game</button>
+          </div>
+          
+          <div class="log-auto-scroll">
+            <input type="checkbox" id="auto-scroll" checked>
+            <label for="auto-scroll">Auto-scroll</label>
+          </div>
+          
+          <button class="log-btn" onclick="pauseLogs()" id="pause-btn">⏸️ Pause</button>
+          <button class="log-btn" onclick="clearLogs()">🗑️ Clear</button>
+          <button class="log-btn" onclick="exportLogs()">📥 Export</button>
+        </div>
+        
+        <!-- Log Box -->
         <div class="log-box" id="log-box"></div>
       </div>
     </div>

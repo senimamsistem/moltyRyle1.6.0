@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from bot.dashboard.state import dashboard_state
 from bot.learning.strategy_dna import DEFAULT_DNA, StrategyDNA, DNA_FILE, MATCH_HISTORY_FILE, sanitize_dna
-from bot.utils.logger import get_logger
+from bot.utils.logger import get_logger, setup_dashboard_logging
 
 log = get_logger(__name__)
 
@@ -21,8 +21,28 @@ STATIC_DIR = os.path.join(DASHBOARD_DIR, "static")
 _ws_clients: set = set()
 
 
+def create_app():
+    """Create and configure the FastAPI app."""
+    app = FastAPI(title="Molty Royale Dashboard")
+    
+    # Setup dashboard logging - redirect all terminal logs to dashboard
+    setup_dashboard_logging(dashboard_state)
+    log.info("🌐 Dashboard logging initialized - terminal logs will appear in dashboard")
+    
+    # Mount static files
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    
+    # Add all routes
+    app.include_router(app)
+    
+    # Start push loop
+    asyncio.create_task(_push_loop(app))
+    
+    return app
+
+
 # FastAPI app
-app = FastAPI(title="Molty Royale Dashboard")
+app = create_app()
 
 @app.get("/", response_class=HTMLResponse)
 async def index_handler():
