@@ -1283,6 +1283,51 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
                 return {"action": "pickup", "data": {"itemId": best_heal["id"]},
                         "reason": f"EP CRISIS: HP={hp} critical - picking up {best_heal.get('typeId','healing')}"}
     
+    # 🆕 PRIORITY 5.5: EP=10 WEAPON SEARCH (Highest Priority for Survival)
+    # Bot dengan EP=10 dan no weapon harus cari weapon SEKARANG!
+    if ep == 10 and (not equipped or equipped.get("typeId", "").lower() == "fist"):
+        log.warning("🔍 EP10_WEAPON_PRIORITY: EP=%d max but NO WEAPON - forcing weapon search NOW!", ep)
+        
+        # Force movement to find weapon regardless of enemies
+        if connections:
+            # Look for regions with potential weapons
+            best_weapon_region = None
+            best_score = -1
+            
+            for conn in connections:
+                rid = _get_region_id(conn)
+                if not rid or rid in danger_ids:
+                    continue
+                
+                # Score based on unvisited regions (higher chance for loot)
+                score = 50
+                if rid not in _visited_regions:
+                    score += 30  # Bonus for unvisited regions
+                
+                # Avoid dangerous regions
+                if rid in danger_ids:
+                    score -= 100
+                
+                if score > best_score:
+                    best_score = score
+                    best_weapon_region = rid
+            
+            if best_weapon_region:
+                log.info("🔍 EP10_WEAPON_MOVE: Moving to %s to find weapon (EP=%d)", best_weapon_region[:8], ep)
+                return {"action": "move", "data": {"regionId": best_weapon_region},
+                        "reason": f"EP10_WEAPON_PRIORITY: No weapon, moving to find weapon (EP={ep})"}
+        
+        # If no connections, use energy drink or rest
+        log.warning("🔄 EP10_NO_CONNECTIONS: EP=%d max but no connections - using energy drink or rest!", ep)
+        energy_drink = _find_energy_drink(inventory)
+        if energy_drink:
+            log.info("⚡ EP10_EMERGENCY_DRINK: Using energy drink to break stuck!")
+            return {"action": "use_item", "data": {"itemId": energy_drink["id"]},
+                    "reason": f"EP10_EMERGENCY: No connections, using energy drink"}
+        
+        return {"action": "rest", "data": {},
+                "reason": f"EP10_EMERGENCY: No connections, forcing rest"}
+    
     # ── Priority 6: EP RECOVERY (Crisis Prevention) ───────────────
     # 🔄 PROACTIVE EP RECOVERY: Jangan tunggu sampai EP = 0!
     
@@ -1328,57 +1373,6 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
         # Force rest regardless of conditions
         return {"action": "rest", "data": {},
                 "reason": f"COOLDOWN_WAIT_FIX: EP={ep} critically low, forcing rest to break stuck loop"}
-    
-    # 🆕 COOLDOWN_WAIT STUCK AT EP=10: Bot punya EP max tapi masih stuck
-    # Bot mungkin stuck karena canAct=False atau cooldown issue
-    # 🚨 PRIORITY: If no weapon, search for weapon instead of rest!
-    if ep == 10 and not enemies_here and not enemies_in_range:
-        # Check if bot has no weapon - prioritize weapon search
-        if not equipped or equipped.get("typeId", "").lower() == "fist":
-            log.warning("🔍 EP10_WEAPON_SEARCH: EP=%d max but NO WEAPON - forcing weapon search instead of rest!", ep)
-            
-            # Force movement to find weapon
-            if connections:
-                # Look for regions with potential weapons
-                best_weapon_region = None
-                best_score = -1
-                
-                for conn in connections:
-                    rid = _get_region_id(conn)
-                    if not rid or rid in danger_ids:
-                        continue
-                    
-                    # Score based on unvisited regions (higher chance for loot)
-                    score = 50
-                    if rid not in _visited_regions:
-                        score += 30  # Bonus for unvisited regions
-                    
-                    # Avoid dangerous regions
-                    if rid in danger_ids:
-                        score -= 100
-                    
-                    if score > best_score:
-                        best_score = score
-                        best_weapon_region = rid
-                
-                if best_weapon_region:
-                    log.info("🔍 EP10_WEAPON_MOVE: Moving to %s to find weapon (EP=%d)", best_weapon_region[:8], ep)
-                    return {"action": "move", "data": {"regionId": best_weapon_region},
-                            "reason": f"EP10_WEAPON_SEARCH: No weapon, moving to find weapon (EP={ep})"}
-        
-        # If has weapon or no connections, then use energy drink or rest
-        log.warning("🔄 COOLDOWN_WAIT_EP10: EP=%d max but bot still stuck - forcing rest to break loop!", ep)
-        
-        # Check energy drink first (waste if EP max, but breaks loop)
-        energy_drink = _find_energy_drink(inventory)
-        if energy_drink:
-            log.info("⚡ COOLDOWN_WAIT_EP10_RECOVERY: Using energy drink to break stuck loop!")
-            return {"action": "use_item", "data": {"itemId": energy_drink["id"]},
-                    "reason": f"COOLDOWN_WAIT_FIX: EP={ep} max but stuck, using energy drink"}
-        
-        # Force rest to break cooldown loop
-        return {"action": "rest", "data": {},
-                "reason": f"COOLDOWN_WAIT_FIX: EP={ep} max but stuck, forcing rest to break loop"}
     
     # EP LOW: Below safe threshold untuk DZ area
     ep_low_threshold = ep_reserve + 3 if (is_in_dz or is_dz_imminent or is_dz_nearby) else 4
