@@ -5,17 +5,20 @@ Run: python -m bot.learning.dashboard
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import List, Dict
 from bot.learning.strategy_dna import DEFAULT_DNA, StrategyDNA
 
-DATA_DIR = "data"
-DNA_FILE = f"{DATA_DIR}/strategy_dna.json"
-HISTORY_FILE = f"{DATA_DIR}/match_history.json"
+DATA_DIR = Path("data")
+DNA_FILE = DATA_DIR / "strategy_dna.json"
+HISTORY_FILE = DATA_DIR / "match_history.json"
 
 
-def load_json(filepath: str):
-    """Load JSON file"""
-    if not os.path.exists(filepath):
+def load_json(filepath):
+    """Load JSON file - accepts str or Path"""
+    if isinstance(filepath, str):
+        filepath = Path(filepath)
+    if not filepath.exists():
         return {}
     with open(filepath, 'r') as f:
         return json.load(f)

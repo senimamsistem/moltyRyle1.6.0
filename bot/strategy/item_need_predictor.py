@@ -1,15 +1,12 @@
 """
 Item Need Prediction System
-Predicts what items are needed based on game phase, current loadout, and threats.
-
-Integrates dengan Strategy DNA untuk auto-tune priorities.
+Predicts item needs based on game phase, current loadout, and threats
+Integrates with Strategy DNA for learning and auto-tuning item priorities
 """
-from dataclasses import dataclass, field
+import json
+from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from enum import Enum
-import json
-import os
-
 from bot.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -81,12 +78,12 @@ class ItemNeedPredictor:
     }
     
     def __init__(self, dna_file: str = "data/strategy_dna.json"):
-        self.dna_file = dna_file
+        self.dna_file = Path(dna_file)
         self._dna = self._load_dna()
         
     def _load_dna(self) -> Dict:
         """Load Strategy DNA untuk item priorities"""
-        if os.path.exists(self.dna_file):
+        if self.dna_file.exists():
             try:
                 with open(self.dna_file, 'r') as f:
                     return json.load(f)

@@ -6,6 +6,7 @@ import json
 import random
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Any, List
 from bot.utils.logger import get_logger
 
@@ -41,9 +42,10 @@ DEFAULT_DNA = {
     "chase_threshold_hp": 50,        # HP musuh untuk chase
 }
 
-# DNA save path
-DNA_FILE = "data/strategy_dna.json"
-MATCH_HISTORY_FILE = "data/match_history.json"
+# DNA save path - cross-platform compatible
+DATA_DIR = Path("data")
+DNA_FILE = DATA_DIR / "strategy_dna.json"
+MATCH_HISTORY_FILE = DATA_DIR / "match_history.json"
 
 
 def _as_number(value, default=0):
@@ -105,7 +107,7 @@ class StrategyDNA:
         
     def _load_dna(self) -> Dict[str, Any]:
         """Load DNA from file or use default"""
-        if os.path.exists(DNA_FILE):
+        if DNA_FILE.exists():
             try:
                 with open(DNA_FILE, 'r') as f:
                     return sanitize_dna(json.load(f))
@@ -115,7 +117,7 @@ class StrategyDNA:
     
     def _load_history(self) -> List[Dict]:
         """Load match history"""
-        if os.path.exists(MATCH_HISTORY_FILE):
+        if MATCH_HISTORY_FILE.exists():
             try:
                 with open(MATCH_HISTORY_FILE, 'r') as f:
                     return json.load(f)
@@ -125,14 +127,14 @@ class StrategyDNA:
     
     def save_dna(self):
         """Save current DNA to file"""
-        os.makedirs(os.path.dirname(DNA_FILE), exist_ok=True)
+        DNA_FILE.parent.mkdir(parents=True, exist_ok=True)
         self.dna = sanitize_dna(self.dna)
         with open(DNA_FILE, 'w') as f:
             json.dump(self.dna, f, indent=2)
     
     def save_history(self):
         """Save match history"""
-        os.makedirs(os.path.dirname(MATCH_HISTORY_FILE), exist_ok=True)
+        MATCH_HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
         with open(MATCH_HISTORY_FILE, 'w') as f:
             json.dump(self.match_history, f, indent=2)
     
@@ -229,22 +231,21 @@ class StrategyDNA:
         from datetime import datetime
         
         try:
-            if not os.path.exists(DNA_FILE):
+            if not DNA_FILE.exists():
                 return
                 
             # Create timestamped backup
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_path = f"{DNA_FILE}.{timestamp}.autobackup"
+            backup_path = DNA_FILE.parent / f"{DNA_FILE.name}.{timestamp}.autobackup"
             
             shutil.copy2(DNA_FILE, backup_path)
             log.info("💾 DNA auto-backup created: %s", backup_path)
             
             # Clean old backups (keep last 5 auto-backups)
-            import glob
-            auto_backups = sorted(glob.glob(f"{DNA_FILE}.*.autobackup"))[:-5]
+            auto_backups = sorted(DNA_FILE.parent.glob(f"{DNA_FILE.name}.*.autobackup"))[:-5]
             for old_backup in auto_backups:
                 try:
-                    os.remove(old_backup)
+                    old_backup.unlink()
                     log.debug("Cleaned old DNA backup: %s", old_backup)
                 except OSError:
                     pass
