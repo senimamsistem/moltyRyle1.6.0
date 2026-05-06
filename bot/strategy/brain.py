@@ -283,25 +283,66 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     global _current_turn
     _current_turn += 1
 
-    # ── PHASE-BASED STRATEGY SELECTION ─────────────────────────────────
+    # ⏱️ PERFORMANCE: Start timing
+    decision_start_time = start_decision_timing()
+
+    # ⚡ PERFORMANCE: Early exit for critical situations
     self_data = view.get("self", {})
+    hp = self_data.get("hp", 100)
+    ep = self_data.get("ep", 10)
+    is_alive = self_data.get("isAlive", True)
+
+    # CRITICAL FAST PATH: Emergency situations - skip all complex logic
+    if not is_alive:
+        return None  # Dead - wait for game_ended
+
+    # CRITICAL FAST PATH: Emergency healing when HP critically low
+    if hp <= 10:
+        inventory = self_data.get("inventory", [])
+        heal = _find_healing_item(inventory, critical=True)
+        if heal:
+            return {"action": "use_item", "data": {"itemId": heal["id"]},
+                    "reason": f"CRITICAL HEAL: HP={hp} - SURVIVAL PRIORITY!"}
+    
+    # ⚡ PERFORMANCE: Emergency combat fast path - immediate response to attacks
+    visible_agents = view.get("visibleAgents", [])
+    equipped = self_data.get("equippedWeapon")
+    w_type = equipped.get("typeId", "").lower() if isinstance(equipped, dict) else ""
+    has_weapon = w_type in ("katana", "sniper", "sword", "pistol", "dagger", "bow")
+    
+    # Check if under attack - immediate response needed
+    recent_damage = getattr(decide_action, '_recent_damage_taken', 0)
+    if recent_damage > 0 and has_weapon and ep >= 2:  # Emergency combat threshold
+        # Find nearest enemy and attack immediately
+        enemies = [a for a in visible_agents if a.get("isAlive") and a.get("id") != self_data.get("id")]
+        if enemies:
+            # Simple nearest enemy selection for fast response
+            nearest = min(enemies, key=lambda e: 0)  # All visible are equally "near" for fast path
+            log.warning("🚨 EMERGENCY_COMBAT: Under attack! Immediate counter-attack!")
+            return {"action": "attack", "data": {"targetId": nearest["id"], "targetType": "agent"},
+                    "reason": f"EMERGENCY COMBAT: Under attack - immediate response!"}
+
+    # ⚡ PERFORMANCE: Only do complex calculations if not in emergency
     alive_count = view.get("aliveCount", 100)
     equipped = self_data.get("equippedWeapon")
-    
+
     # Determine game phase
     if alive_count >= 80:
         game_phase = "EARLY"
         phase_strategy = "WEAPON_SEARCH"
+        latency_game_phase = "early"
     elif alive_count >= 30:
         game_phase = "MID"
         phase_strategy = "WEAPON_SPECIFIC"
+        latency_game_phase = "mid"
     else:
         game_phase = "HIGH"
         phase_strategy = "COMBAT_DOMINANCE"
-    
+        latency_game_phase = "late"
+
     # Initialize action variable
     action = None
-    
+
     # Extract player stats
     hp = self_data.get("hp", 100)
     ep = self_data.get("ep", 10)
@@ -358,17 +399,20 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     names_here = [i.get("typeId", i.get("name", "?")) for i in items_here]
     names_nearby = [i.get("typeId", i.get("name", "?")) for i in items_nearby]
     
-    log.info("📦 LOOT_SCAN: total_visible=%d | HERE=%s | NEARBY=%s",
-             len(visible_items), names_here, names_nearby)
+    # ⚡ PERFORMANCE: Reduced logging - only log when items found
+    if visible_items:
+        log.debug("📦 LOOT_SCAN: total_visible=%d | HERE=%s | NEARBY=%s",
+                 len(visible_items), names_here, names_nearby)
     
-    # Inventory summary for monitoring
+    # Inventory summary for monitoring - only log when changes
     inv_heals = len([i for i in inventory if i.get("typeId", "").lower() in RECOVERY_ITEMS])
     inv_wpns = len([i for i in inventory if i.get("category") == "weapon" or i.get("typeId", "").lower() in WEAPONS])
     inv_maps = len([i for i in inventory if isinstance(i, dict) and i.get("typeId", "").lower() == "map"])
-    log.info("🎒 INVENTORY: ❤️HP=%d ⚡EP=%d | 💊HealItems=%d ⚔️Weapons=%d 🗺️Maps=%d | WeaponEquipped=%s",
-             hp, ep, inv_heals, inv_wpns, inv_maps, _format_weapon_with_icon(equipped.get("typeId", "fist") if isinstance(equipped, dict) else "fist"))
-    if inv_maps > 0:
-        log.info("🗺️ [MAP_TRACKING] Inventory contains %d Map(s) - should use immediately if not used yet", inv_maps)
+    
+    # Only log inventory summary every 10 turns or when critical
+    if _current_turn % 10 == 0 or hp <= 30 or ep <= 3:
+        log.info("🎒 INVENTORY: ❤️HP=%d ⚡EP=%d | 💊HealItems=%d ⚔️Weapons=%d 🗺️Maps=%d | WeaponEquipped=%s",
+                 hp, ep, inv_heals, inv_wpns, inv_maps, _format_weapon_with_icon(equipped.get("typeId", "fist") if isinstance(equipped, dict) else "fist"))
     
     # Fallback connections from currentRegion if connectedRegions empty
     connections = connected_regions or region.get("connections", [])
@@ -474,22 +518,25 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     game_phase = "early" if alive_count > 70 else ("mid" if alive_count > 25 else "late")
     strategy = dna.get_strategy_params(game_phase, hp, alive_count)
     
-    log.info("🧬 DNA_STRATEGY: phase=%s | aggression=%.2f | finisher_threshold=%d | war_ready_hp=%d",
-             game_phase, strategy["aggression"], strategy["finisher_threshold"], 
-             strategy["ready_for_war_hp"])
+    # ⚡ PERFORMANCE: Only log DNA strategy every 5 turns
+    if _current_turn % 5 == 0:
+        log.debug("🧬 DNA_STRATEGY: phase=%s | aggression=%.2f | finisher_threshold=%d | war_ready_hp=%d",
+                 game_phase, strategy["aggression"], strategy["finisher_threshold"], 
+                 strategy["ready_for_war_hp"])
     
     # Aggression criteria: weapon + at least 1 healing item + decent HP
     # Using LEARNED DNA parameters instead of static values!
     is_ready_for_war = has_weapon and healing_count >= 1 and hp >= strategy["ready_for_war_hp"]
-    # FINISHER logic: If enemy is weak, we don't need "ready for war"
+    # FINISHER logic: If enemy are weak, we don't need "ready for war"
     # Using LEARNED finisher threshold
     finisher_threshold = strategy["finisher_threshold"]
     finisher_targets = [e for e in enemies if e.get("hp", 100) < finisher_threshold]
 
-    # Log enemy scan for debugging — critical to trace why attack isn't firing
-    log.info("🔍 ENEMY_SCAN: total_visible=%d | here=%d | in_range=%d | finishers=%d | ready_for_war=%s | w_type=%s",
-             len(enemies), len(enemies_here), len(enemies_in_range), len(finisher_targets),
-             is_ready_for_war, w_type or "fist")
+    # ⚡ PERFORMANCE: Only log enemy scan when enemies found
+    if enemies:
+        log.debug("🔍 ENEMY_SCAN: total_visible=%d | here=%d | in_range=%d | finishers=%d | ready_for_war=%s | w_type=%s",
+                 len(enemies), len(enemies_here), len(enemies_in_range), len(finisher_targets),
+                 is_ready_for_war, w_type or "fist")
     
     # Record enemy sightings untuk movement prediction
     for enemy in enemies:
