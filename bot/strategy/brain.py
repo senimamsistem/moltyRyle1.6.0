@@ -1303,6 +1303,48 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             return {"action": "rest", "data": {},
                     "reason": f"EP EMERGENCY: Resting to recover EP for DZ escape"}
     
+    # 🆕 EP CRITICAL RECOVERY: Bot stuck dengan EP sangat rendah (EP max = 10)
+    # Bot tidak bisa move/attack tapi stuck di COOLDOWN_WAIT
+    if ep <= 6 and not enemies_here and not enemies_in_range:
+        log.warning("🔋 EP_CRITICAL_RECOVERY: EP=%d critically low - forcing rest to break COOLDOWN_WAIT loop!", ep)
+        
+        # Check energy drink first
+        energy_drink = _find_energy_drink(inventory)
+        if energy_drink:
+            log.info("⚡ EP_CRITICAL_RECOVERY: Using energy drink (+5 EP) to break stuck loop!")
+            return {"action": "use_item", "data": {"itemId": energy_drink["id"]},
+                    "reason": f"EP CRITICAL: EP={ep} too low, using energy drink to recover"}
+        
+        # Force rest to recover EP
+        log.info("🔋 EP_CRITICAL_REST: EP=%d too low - forcing rest to recover (+1-2 EP)", ep)
+        return {"action": "rest", "data": {},
+                "reason": f"EP CRITICAL: EP={ep} too low, resting to recover and break COOLDOWN_WAIT loop"}
+    
+    # 🆕 STUCK IN COOLDOWN_WAIT: Bot tidak bisa action karena EP habis atau tidak cukup
+    # Tambahkan logic untuk detect dan fix COOLDOWN_WAIT loop
+    if ep <= 4 and not enemies_here and not enemies_in_range:
+        log.error("🚨 COOLDOWN_WAIT_STUCK: EP=%d too low - bot stuck in COOLDOWN_WAIT loop! FORCING RECOVERY!", ep)
+        
+        # Force rest regardless of conditions
+        return {"action": "rest", "data": {},
+                "reason": f"COOLDOWN_WAIT_FIX: EP={ep} critically low, forcing rest to break stuck loop"}
+    
+    # 🆕 COOLDOWN_WAIT STUCK AT EP=10: Bot punya EP max tapi masih stuck
+    # Bot mungkin stuck karena canAct=False atau cooldown issue
+    if ep == 10 and not enemies_here and not enemies_in_range:
+        log.warning("🔄 COOLDOWN_WAIT_EP10: EP=%d max but bot still stuck - forcing rest to break loop!", ep)
+        
+        # Check energy drink first (waste if EP max, but breaks loop)
+        energy_drink = _find_energy_drink(inventory)
+        if energy_drink:
+            log.info("⚡ COOLDOWN_WAIT_EP10_RECOVERY: Using energy drink to break stuck loop!")
+            return {"action": "use_item", "data": {"itemId": energy_drink["id"]},
+                    "reason": f"COOLDOWN_WAIT_FIX: EP={ep} max but stuck, using energy drink"}
+        
+        # Force rest to break cooldown loop
+        return {"action": "rest", "data": {},
+                "reason": f"COOLDOWN_WAIT_FIX: EP={ep} max but stuck, forcing rest to break loop"}
+    
     # EP LOW: Below safe threshold untuk DZ area
     ep_low_threshold = ep_reserve + 3 if (is_in_dz or is_dz_imminent or is_dz_nearby) else 4
     
