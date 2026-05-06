@@ -4,4 +4,10 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "python -m bot.main"
-restartPolicyType = "NEVER"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Railway memory limits for deployment
+[deploy.memory]
+limit = "512Mi"
+swapLimit = "256Mi"

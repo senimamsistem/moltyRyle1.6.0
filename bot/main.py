@@ -31,14 +31,17 @@ async def start_dashboard():
     
     log.info("🌐 Starting Dashboard on port %s", DASHBOARD_PORT)
     
-    # Configure uvicorn for Railway with 0.0.0.0 IP and reduced log noise
+    # Configure uvicorn for Railway with memory optimization
     config = uvicorn.Config(
         dashboard_state.app,
         host="0.0.0.0",
         port=DASHBOARD_PORT,
-        log_level="warning",  # Reduce log noise
-        access_log=False,      # Disable access logs
-        use_colors=False       # Disable colors for cleaner output
+        log_level="warning",      # Reduce log noise
+        access_log=False,          # Disable access logs
+        use_colors=False,          # Disable colors for cleaner output
+        limit_concurrency=10,      # Limit concurrent connections for memory
+        limit_max_requests=1000,    # Restart after 1000 requests to free memory
+        timeout_keep_alive=5        # Shorter keep-alive for memory
     )
     
     server = uvicorn.Server(config)
