@@ -2379,26 +2379,10 @@ def _calculate_distance_to_enemy(enemy, current_region_id):
     # ── Priority 10: Rest (EP < 4 and safe) ───────────────────────
     # Also rest if weather is storm and no urgent targets
     if (ep < 4 or weather_delay) and not enemies_here and not region.get("isDeathZone") and region_id not in danger_ids:
-        result = {"action": "rest", "data": {},
-                  "reason": f"⏸️ REST: EP={ep}/{max_ep}, area is safe (+1 bonus EP)"}
-        # ⏱️ PERFORMANCE: Record timing
-        end_decision_timing(decision_start_time, "rest", latency_game_phase, alive_count)
-        # ⏱️ Check untuk periodic performance report
-        check_performance()
-        return result
+        return {"action": "rest", "data": {},
+                "reason": f"⏸️ REST: EP={ep}/{max_ep}, area is safe (+1 bonus EP)"}
 
-    # ⏱️ PERFORMANCE: Record timing untuk wait decision
-    end_decision_timing(decision_start_time, "wait", latency_game_phase, alive_count)
-    # ⏱️ Check untuk periodic performance report
-    check_performance()
-    
-    # 🔍 DEBUG: Log final action decision
-    log.warning("🚨 NO_ACTION_RETURNED - Bot will wait (this might be wrong!)")
-    log.info("🔍 DEBUG_INFO: can_act=%s, hp=%d, ep=%d, phase=%s, enemies=%d", 
-             can_act, hp, ep, game_phase if 'game_phase' in locals() else "unknown", 
-             len([a for a in visible_agents if a.get("isAlive") and a.get("id") != self_data.get("id")]) if 'visible_agents' in locals() else 0)
-    
-    return None  # tunggu for next turn
+    return None  # Wait for next turn
 
 
 # ── Helper functions ──────────────────────────────────────────────────

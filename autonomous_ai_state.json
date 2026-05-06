@@ -1,20 +1,34 @@
 {
   "strategy_params": {
     "aggression_level": 0.8019000000000002,
+<<<<<<< HEAD
     "weak_enemy_threshold": 40,
     "ep_conservation_threshold": 50,
+=======
+    "weak_enemy_threshold": 45,
+    "ep_conservation_threshold": 26,
+>>>>>>> parent of fd191e1 (.)
     "range_combat_priority": 0.8,
     "guardian_hunting_priority": 0.6,
     "risk_tolerance": 0.5
   },
+<<<<<<< HEAD
   "optimization_cycle": 27,
   "last_optimization_time": 1778034609.7791278,
+=======
+  "optimization_cycle": 15,
+  "last_optimization_time": 1777805809.7049274,
+>>>>>>> parent of fd191e1 (.)
   "performance_history": [
     {
       "kills_per_game": 0,
       "deaths_per_game": 1,
       "kd_ratio": 0.0,
+<<<<<<< HEAD
       "survival_time": 3118,
+=======
+      "survival_time": 3099,
+>>>>>>> parent of fd191e1 (.)
       "weapons_acquired": 0,
       "guardians_killed": 0,
       "ep_efficiency": 0.0,
@@ -24,7 +38,11 @@
       "kills_per_game": 0,
       "deaths_per_game": 1,
       "kd_ratio": 0.0,
+<<<<<<< HEAD
       "survival_time": 2296,
+=======
+      "survival_time": 3541,
+>>>>>>> parent of fd191e1 (.)
       "weapons_acquired": 0,
       "guardians_killed": 0,
       "ep_efficiency": 0.0,
@@ -34,7 +52,11 @@
       "kills_per_game": 0,
       "deaths_per_game": 1,
       "kd_ratio": 0.0,
+<<<<<<< HEAD
       "survival_time": 3543,
+=======
+      "survival_time": 2499,
+>>>>>>> parent of fd191e1 (.)
       "weapons_acquired": 0,
       "guardians_killed": 0,
       "ep_efficiency": 0.0,
@@ -44,7 +66,11 @@
       "kills_per_game": 0,
       "deaths_per_game": 1,
       "kd_ratio": 0.0,
+<<<<<<< HEAD
       "survival_time": 2994,
+=======
+      "survival_time": 2920,
+>>>>>>> parent of fd191e1 (.)
       "weapons_acquired": 0,
       "guardians_killed": 0,
       "ep_efficiency": 0.0,
@@ -54,7 +80,11 @@
       "kills_per_game": 0,
       "deaths_per_game": 1,
       "kd_ratio": 0.0,
+<<<<<<< HEAD
       "survival_time": 2729,
+=======
+      "survival_time": 188,
+>>>>>>> parent of fd191e1 (.)
       "weapons_acquired": 0,
       "guardians_killed": 0,
       "ep_efficiency": 0.0,
@@ -64,7 +94,11 @@
       "kills_per_game": 0,
       "deaths_per_game": 1,
       "kd_ratio": 0.0,
+<<<<<<< HEAD
       "survival_time": 2491,
+=======
+      "survival_time": 2843,
+>>>>>>> parent of fd191e1 (.)
       "weapons_acquired": 0,
       "guardians_killed": 0,
       "ep_efficiency": 0.0,
@@ -74,7 +108,21 @@
       "kills_per_game": 0,
       "deaths_per_game": 1,
       "kd_ratio": 0.0,
+<<<<<<< HEAD
       "survival_time": 812,
+=======
+      "survival_time": 2454,
+      "weapons_acquired": 0,
+      "guardians_killed": 0,
+      "ep_efficiency": 0.0,
+      "combat_success_rate": 0.0
+    },
+    {
+      "kills_per_game": 1,
+      "deaths_per_game": 1,
+      "kd_ratio": 1.0,
+      "survival_time": 768,
+>>>>>>> parent of fd191e1 (.)
       "weapons_acquired": 0,
       "guardians_killed": 0,
       "ep_efficiency": 0.0,
@@ -84,7 +132,11 @@
       "kills_per_game": 0,
       "deaths_per_game": 1,
       "kd_ratio": 0.0,
+<<<<<<< HEAD
       "survival_time": 1215,
+=======
+      "survival_time": 1806,
+>>>>>>> parent of fd191e1 (.)
       "weapons_acquired": 0,
       "guardians_killed": 0,
       "ep_efficiency": 0.0,
@@ -94,6 +146,7 @@
       "kills_per_game": 0,
       "deaths_per_game": 1,
       "kd_ratio": 0.0,
+<<<<<<< HEAD
       "survival_time": 525,
       "weapons_acquired": 0,
       "guardians_killed": 0,
@@ -105,6 +158,9 @@
       "deaths_per_game": 1,
       "kd_ratio": 0.0,
       "survival_time": 3544,
+=======
+      "survival_time": 3017,
+>>>>>>> parent of fd191e1 (.)
       "weapons_acquired": 0,
       "guardians_killed": 0,
       "ep_efficiency": 0.0,
