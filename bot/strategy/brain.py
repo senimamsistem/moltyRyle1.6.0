@@ -1288,7 +1288,19 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
     if ep == 10 and (not equipped or equipped.get("typeId", "").lower() == "fist"):
         log.warning("🔍 EP10_WEAPON_PRIORITY: EP=%d max but NO WEAPON - forcing weapon search NOW!", ep)
         
-        # Force movement to find weapon regardless of enemies
+        # 🚨 CRITICAL FIX: Check for weapons in current region FIRST!
+        weapon_items_here = [item for item in items_here if item.get("category") == "weapon" or 
+                            item.get("typeId", "").lower() in WEAPONS]
+        
+        if weapon_items_here:
+            # Pick up best weapon in current region immediately!
+            best_weapon = max(weapon_items_here, key=lambda x: WEAPONS.get(x.get("typeId", "").lower(), {}).get("bonus", 0))
+            log.warning("🔍 EP10_WEAPON_HERE: Found weapon %s in current region - PICKING UP NOW!", 
+                       best_weapon.get("typeId", "weapon"))
+            return {"action": "pickup", "data": {"itemId": best_weapon["id"]},
+                    "reason": f"EP10_WEAPON_PRIORITY: Found {best_weapon.get('typeId','weapon')} - pickup immediately"}
+        
+        # If no weapons here, then move to find weapon
         if connections:
             # Look for regions with potential weapons
             best_weapon_region = None
@@ -1315,7 +1327,7 @@ def decide_action(view: dict, can_act: bool, memory_temp: dict = None) -> dict |
             if best_weapon_region:
                 log.info("🔍 EP10_WEAPON_MOVE: Moving to %s to find weapon (EP=%d)", best_weapon_region[:8], ep)
                 return {"action": "move", "data": {"regionId": best_weapon_region},
-                        "reason": f"EP10_WEAPON_PRIORITY: No weapon, moving to find weapon (EP={ep})"}
+                        "reason": f"EP10_WEAPON_PRIORITY: No weapon here, moving to find weapon (EP={ep})"}
         
         # If no connections, use energy drink or rest
         log.warning("🔄 EP10_NO_CONNECTIONS: EP=%d max but no connections - using energy drink or rest!", ep)

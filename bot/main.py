@@ -31,12 +31,14 @@ async def start_dashboard():
     
     log.info("🌐 Starting Dashboard on port %s", DASHBOARD_PORT)
     
-    # Configure uvicorn for Railway with 0.0.0.0 IP
+    # Configure uvicorn for Railway with 0.0.0.0 IP and reduced log noise
     config = uvicorn.Config(
         dashboard_state.app,
         host="0.0.0.0",
         port=DASHBOARD_PORT,
-        log_level="info"
+        log_level="warning",  # Reduce log noise
+        access_log=False,      # Disable access logs
+        use_colors=False       # Disable colors for cleaner output
     )
     
     server = uvicorn.Server(config)
